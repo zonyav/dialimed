@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Поиск медизделия</title>
+<style>
+
+:root{
+  color-scheme:dark;
+  --bg:#0B0B0D;
+  --surface:#141419;
+  --raised:#1A1A21;
+  --line:rgba(255,255,255,.06);
+  --ink:#F4F4F1;
+  --dim:#9C9CA6;
+
+  --faint:#8B8B96;
+  --lime:#CBF251;
+  --lime-ink:#12160A;
+  --lime-dim:rgba(203,242,81,.14);
+  --warn:#FFC46B;
+  --err:#FF8A7A;
+
+  --drop-mid:#F0A64B;
+  --drop-hi:#FF6B5A;
+  --drop-up:#8FB8FF;
+
+  --edge-top:rgba(255,255,255,.06);
+  --r:14px;
+
+  --head-h:58px;
+  --nav-h:47px;
+
+  --f-display:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  --f-text:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --f-small:"Segoe UI Variable Small","Segoe UI",system-ui,sans-serif;
+
+  --cols:76px minmax(150px,1fr) minmax(215px,1.6fr) minmax(168px,1.1fr)
+         120px 104px 58px 84px;
+  --colgap:16px;
+}
+[data-theme="light"]{
+  color-scheme:light;
+
+  --bg:#F0F0EA; --surface:#FFFFFF; --raised:#E9E9E1;
+  --line:rgba(0,0,0,.14);
+
+  --ink:#15161A; --dim:#5E5F68; --faint:#686971;
+
+  --lime:#516A08; --lime-ink:#FFFFFF; --lime-dim:rgba(81,106,8,.14);
+  --warn:#8A5A05; --err:#A93B2C;
+
+  --drop-mid:#A5560A; --drop-hi:#B3241A; --drop-up:#1F58A8;
+  --edge-top:rgba(0,0,0,.22);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;font-family:var(--f-text)}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font:400 15px/1.6 var(--f-text);
+  font-feature-settings:"tnum" 0;
+  -webkit-font-smoothing:antialiased;
+}
+
+.page{max-width:min(1550px, 88vw);margin:0 auto;padding:0 32px 120px}
+.hidden{display:none !important}
+a{color:var(--lime)}
+a:hover{opacity:.8}
+
+header{
+  position:sticky;top:0;z-index:30;
+  padding:14px 32px;
+  background:var(--bg);
+  border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:14px;flex-wrap:nowrap;
+}
+header .mark{width:8px;height:8px;border-radius:50%;background:var(--lime);flex:0 0 auto}
+header b{font:600 14px/1 var(--f-small);letter-spacing:.01em;white-space:nowrap;
+  flex:0 0 auto}
+header .sp{flex:1 1 0;min-width:8px}
+header .ctx{color:var(--faint);font-size:13px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:38ch;flex:0 1 auto;min-width:0}
+header .st{color:var(--faint);font-size:13px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;min-width:0;flex:0 1 auto}
+header .st > span{margin-left:16px}
+header .st > span:first-child{margin-left:0}
+header .st .no{color:var(--err)}
+header .st .yes{color:var(--dim)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;
+  background:var(--faint);vertical-align:middle}
+.dot.on{background:var(--lime)} .dot.off{background:var(--err)}
+#th{border:1px solid var(--line);background:transparent;color:var(--dim);
+  border-radius:999px;padding:7px 14px;font:400 13px/1 var(--f-small);cursor:pointer;
+  white-space:nowrap;flex:0 0 auto}
+#th:hover{color:var(--ink)}
+header #kbLink{font-size:13.5px;text-decoration:none;white-space:nowrap;flex:0 0 auto}
+
+h1{
+  font:300 clamp(26px,3.4vw,40px)/1.06 var(--f-display);
+  letter-spacing:-.028em;margin:26px 0 0;max-width:22ch;
+}
+
+.lede{color:var(--dim);margin:10px 0 0;max-width:none;font-size:15.5px}
+
+h1.hidden + .lede{margin-top:28px}
+
+.figures{display:flex;gap:52px;flex-wrap:wrap;margin:44px 0 8px}
+.fig .v{font:300 40px/1 var(--f-display);
+  letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.fig .v small{font-size:19px;color:var(--dim);margin-left:6px;letter-spacing:0}
+.fig .k{color:var(--faint);font-size:12.5px;margin-top:6px}
+
+nav{display:flex;gap:30px;margin:46px 0 0;border-bottom:1px solid var(--line);
+  flex-wrap:nowrap;align-items:center;position:sticky;top:var(--head-h);z-index:25;
+  background:var(--bg)}
+nav .sp{flex:1 1 0;min-width:12px}
+nav #dl{margin:0 0 10px;flex:0 0 auto}
+nav a{color:var(--dim);text-decoration:none;padding:0 0 14px;font-size:15px;
+  border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer;
+  background:none;border-left:0;border-right:0;border-top:0;font-family:inherit}
+nav a:hover{color:var(--ink)}
+nav a.on{color:var(--ink);border-bottom-color:var(--lime)}
+nav a .c{color:var(--faint);font-size:12.5px;margin-left:6px;
+  font-variant-numeric:tabular-nums}
+nav a .c.warn{color:var(--warn)}
+
+.find{display:flex;align-items:center;gap:12px;margin:26px 0 6px;flex-wrap:wrap}
+.find input{
+  flex:1;min-width:220px;background:var(--surface);color:var(--ink);
+  border:1px solid var(--line);
+  border-radius:10px;padding:12px 16px;font:inherit;
+}
+.find input::placeholder{color:var(--faint)}
+.find input:focus{outline:2px solid var(--lime);outline-offset:-2px;
+  border-color:var(--lime)}
+.chip{
+  border:1px solid var(--line);
+  background:transparent;color:var(--dim);
+  border-radius:999px;padding:9px 15px;font:400 13.5px/1 var(--f-small);cursor:pointer;
+  white-space:nowrap;
+}
+.chip:hover{color:var(--ink)}
+.chip.on{background:var(--lime);color:var(--lime-ink);border-color:transparent}
+
+.chip.toggle{border-radius:9px}
+.chip.toggle.on{background:transparent;color:var(--lime);border-color:var(--lime)}
+.chip.toggle.on::before{content:"✓ "}
+.count{color:var(--faint);font-size:13px;margin-left:auto;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+
+.rows{margin:18px 0 0;display:flex;flex-direction:column;gap:10px}
+.row{
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:var(--r);
+  padding:16px 20px;
+  transition:background .14s ease, border-color .14s ease;
+
+  content-visibility:auto;
+  contain-intrinsic-size:auto 240px;
+}
+.row:hover{background:var(--raised);border-color:var(--edge-top)}
+.row.hit{border-color:var(--lime)}
+.grid{
+  display:grid;
+  grid-template-columns:var(--cols);
+  gap:var(--colgap);align-items:baseline;
+}
+
+.model{font-size:15.5px;letter-spacing:-.01em}
+.who{color:var(--ink)}
+.who.none{color:var(--faint)}
+
+.alt{display:block;color:var(--faint);font-size:12px;line-height:1.4;margin-top:2px}
+.c-date{color:var(--faint);font-size:13px;font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+
+.head-row{position:sticky;top:calc(var(--head-h) + var(--nav-h));z-index:20;background:var(--bg);
+  padding:14px 20px 10px;color:var(--faint);font:600 11px/1.4 var(--f-small);
+  letter-spacing:.1em;text-transform:uppercase;
+  border:1px solid transparent;border-bottom:1px solid var(--line);margin-top:8px}
+.head-row .grid > *{cursor:pointer;user-select:none}
+.head-row .grid > *:hover{color:var(--dim)}
+.head-row .s{color:var(--lime);margin-left:4px}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+
+.tbl .num .src{white-space:nowrap}
+
+.drop{color:var(--dim)}
+.drop.mid{color:var(--drop-mid)}
+.drop.big{color:var(--drop-hi);font-weight:600}
+.drop.up{color:var(--drop-up)}
+.drop.zero{color:var(--faint)}
+
+.text{color:var(--dim);font-size:13.5px;line-height:1.6;margin:14px 0 0;
+  padding:13px 0 0;border-top:1px solid var(--line);max-width:120ch;
+  overflow-wrap:anywhere;white-space:pre-line}
+.text b{color:var(--ink);font-weight:600}
+.text .reg{display:block;margin-top:8px;color:var(--faint)}
+
+.text .why{margin-top:4px}
+.text .why b.bad{color:var(--warn);font-weight:600}
+.meta{color:var(--faint);font-size:12.5px;margin-top:10px;
+  display:flex;gap:14px;flex-wrap:wrap;align-items:baseline}
+.meta .sep{opacity:.5}
+
+.src{display:block;margin-top:3px;color:var(--faint);font-size:11.5px;line-height:1.45}
+td > .src:first-child{margin-top:0}
+.src.ok::before{content:"✓ ";color:var(--lime)}
+.src.hand::before{content:"✎ ";color:var(--lime)}
+.src.weak::before{content:"◦ "}
+.guess{display:block;margin-top:5px;color:var(--warn);font-size:11.5px;line-height:1.45}
+.guess b{font-weight:600;text-transform:uppercase;letter-spacing:.08em;font-size:10px}
+
+.edit{cursor:text}
+.edit .val{border-bottom:1px solid var(--line)}
+.edit:hover .val{border-bottom-color:var(--lime)}
+.edit .add{color:var(--lime);font-size:11.5px;margin-left:8px;visibility:hidden}
+.row:hover .edit .add{visibility:visible}
+.edit input{width:100%;background:var(--bg);color:var(--ink);
+  border:1px solid var(--lime);border-radius:8px;padding:5px 9px;font:inherit;
+  font-size:14px}
+.edit .pending{color:var(--warn);border-bottom:1px solid var(--warn)}
+.pend{display:inline-flex;gap:6px;margin-left:8px;vertical-align:middle}
+.pend button{padding:3px 9px;font-size:11.5px;border-radius:7px}
+.pend .no{background:transparent;color:var(--dim);border-color:var(--line)}
+.pend-note{display:block;margin-top:3px;color:var(--warn);font-size:11.5px}
+.saved{color:var(--lime)}
+
+.panel{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);padding:22px 24px;margin:16px 0 0}
+
+.setup{display:grid;grid-template-columns:1fr;gap:0 40px;align-items:start}
+.setup .full{grid-column:1/-1}
+@media(min-width:1000px){
+  .setup{grid-template-columns:1fr 1fr}
+  .setup > div > .sect:first-child{margin-top:0}
+}
+
+@media(min-width:1180px){
+  .setup{grid-template-columns:1.15fr .85fr}
+
+  .setup .fields{grid-template-columns:1fr 1fr;gap:16px}
+}
+
+.hist{margin:14px 0 0}
+.hist .item{display:flex;gap:14px;align-items:baseline;padding:9px 2px;
+  border-bottom:1px solid var(--line);cursor:pointer}
+.hist .item:last-child{border-bottom:0}
+.hist .item:hover{color:var(--ink)}
+.hist .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:13.5px}
+.hist .meta{color:var(--faint);font-size:12.5px;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.hist .cur{color:var(--lime)}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:20px}
+label{display:block;color:var(--faint);font:600 11px/1.4 var(--f-small);
+  letter-spacing:.1em;text-transform:uppercase;margin-bottom:7px}
+input[type=text],input[type=number],textarea{
+  width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);
+  border-radius:10px;padding:11px 14px;font:inherit;
+}
+textarea{min-height:86px;resize:vertical;font-family:var(--f-text);font-size:14px}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+input:focus,textarea:focus{outline:2px solid var(--lime);outline-offset:-2px;
+  border-color:var(--lime)}
+.hint{color:var(--faint);font-size:12.5px;line-height:1.5;margin-top:7px}
+.chk{display:inline-flex;align-items:center;gap:9px;color:var(--ink);font-size:14px;
+  cursor:pointer;margin:0;text-transform:none;letter-spacing:0;font-weight:400}
+.chk input{width:auto;accent-color:var(--lime);margin:0}
+
+.pick-row{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;
+  border-bottom:1px solid var(--line)}
+.pick-row:last-child{border-bottom:0}
+.pick-row > input{flex:0 0 auto;width:15px;height:15px;margin:3px 0 0;
+  accent-color:var(--lime)}
+.pick-row > div{flex:1;min-width:0}
+.pick-list{margin-top:14px;border:1px solid var(--line);border-radius:10px;
+  overflow:hidden}
+.stack{display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+.sect{color:var(--faint);font:600 11px/1.4 var(--f-small);letter-spacing:.1em;
+  text-transform:uppercase;margin:26px 0 12px}
+
+.note{border:1px solid var(--line);border-left:2px solid var(--dim);
+  border-radius:10px;padding:13px 16px;margin:0 0 10px;font-size:14px;
+  line-height:1.55;color:var(--dim)}
+.note b{color:var(--ink);font-weight:600;display:block;margin-bottom:3px}
+.note .what{color:var(--faint);font-size:12.5px;margin-top:5px}
+.note.warn{border-left-color:var(--warn)} .note.warn b{color:var(--warn)}
+.note.err{border-left-color:var(--err)} .note.err b{color:var(--err)}
+.note.ok{border-left-color:var(--lime)} .note.ok b{color:var(--lime)}
+
+.bar{height:3px;background:var(--line);border-radius:2px;overflow:hidden;
+  margin:14px 0 10px}
+.bar>i{display:block;height:100%;width:0;background:var(--lime);
+  transition:width .3s ease-out}
+.stage{display:flex;justify-content:space-between;gap:16px;align-items:baseline}
+.stage b{font-weight:600;font-size:15px}
+.stage span{color:var(--faint);font-size:13px;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.steps{list-style:none;margin:14px 0 0;padding:0;display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:4px 28px;
+  color:var(--faint);font-size:13px}
+.steps li{display:flex;gap:9px;align-items:baseline}
+.steps .t{width:11px;flex:0 0 auto}
+.steps li.done{color:var(--dim)} .steps li.done .t{color:var(--lime)}
+.steps li.now{color:var(--ink)} .steps li.now .t{color:var(--lime)}
+
+.state{padding:56px 0;color:var(--faint);max-width:60ch}
+.state .big{color:var(--dim);font-size:17px;margin-bottom:8px}
+
+.scrollbox{overflow:auto;margin-top:18px;
+  max-height:calc(100vh - var(--head-h) - var(--nav-h) - 28px)}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th{position:sticky;top:0;z-index:2;background:var(--bg);text-align:left;
+  color:var(--faint);font:600 11px/1.4 var(--f-small);letter-spacing:.1em;
+  text-transform:uppercase;padding:10px 14px;border-bottom:1px solid var(--line);
+  white-space:nowrap}
+.tbl td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl tbody tr:hover > td{background:var(--raised)}
+.tbl .num{text-align:right}
+.tbl table th{position:static;background:transparent}
+.tbl table tr:hover > td{background:transparent}
+.tbl input[type=checkbox]{accent-color:var(--lime)}
+
+.tbl.fixed{table-layout:fixed}
+.tbl td.wrap{overflow-wrap:anywhere;white-space:normal}
+
+.jump{color:var(--lime);cursor:pointer;text-decoration:none;
+  border-bottom:1px solid transparent}
+.jump:hover{border-bottom-color:var(--lime)}
+.tbl td .jump{display:block;margin-bottom:5px}
+.all-rows{margin-top:8px;font-size:12.5px}
+
+.chip.pick{background:var(--lime-dim);color:var(--ink);border-color:var(--lime)}
+
+button{
+  font:600 15px/1 var(--f-text);
+  border:1px solid var(--lime);border-radius:11px;padding:14px 24px;cursor:pointer;
+  color:var(--lime-ink);background:var(--lime);
+  transition:opacity .14s ease;
+}
+button:hover{opacity:.86}
+button:active{opacity:.72}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.quiet{background:transparent;color:var(--ink);border-color:var(--line)}
+button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
+:where(input,textarea,button,a,[tabindex]):focus-visible{
+  outline:2px solid var(--lime);outline-offset:2px}
+
+.modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;
+  justify-content:center;padding:24px;background:rgba(0,0,0,.62)}
+[data-theme="light"] .modal{background:rgba(20,20,25,.42)}
+.modal .box{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);max-width:640px;width:100%;max-height:calc(100vh - 48px);
+  display:flex;flex-direction:column;padding:26px 28px;gap:18px}
+.modal h2{font:400 22px/1.25 var(--f-display);letter-spacing:-.02em;margin:0}
+.modal .body{color:var(--dim);font-size:14.5px;line-height:1.6;overflow:auto}
+.modal .body p{margin:0 0 9px}
+.modal .body b{color:var(--ink);font-weight:600}
+.modal .body .what{color:var(--faint);font-size:12.5px}
+.modal .foot{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.pick{display:flex;gap:10px;align-items:baseline;border:1px solid var(--line);
+  border-radius:10px;padding:9px 13px;margin-bottom:6px;cursor:pointer}
+.pick:hover{border-color:var(--lime)}
+.pick input{width:auto;accent-color:var(--lime);margin:0}
+.pick b{color:var(--ink)}
+.sample{border:1px solid var(--line);border-radius:10px;margin-top:10px}
+.sample div{padding:8px 13px;border-bottom:1px solid var(--line);font-size:12.5px;
+  color:var(--faint)}
+.sample div:last-child{border-bottom:0}
+
+.toasts{position:fixed;left:28px;bottom:26px;z-index:60;display:flex;
+  flex-direction:column;gap:10px;max-width:min(440px,80vw)}
+.toast{background:var(--raised);border:1px solid var(--line);
+  border-left:2px solid var(--lime);border-radius:10px;padding:12px 16px;
+  font-size:14px;line-height:1.5;display:flex;gap:14px;align-items:flex-start}
+.toast.bad{border-left-color:var(--err)}
+.toast button{padding:3px 9px;font-size:12px;border-radius:7px;flex:0 0 auto}
+
+@media (prefers-reduced-motion: reduce){*{transition:none !important}}
+
+@media (max-width:1240px){
+  :root{--cols:repeat(4,minmax(0,1fr));--colgap:16px}
+  .head-row{display:none}
+  .grid{align-items:start}
+  .grid > *::before{content:attr(data-l);display:block;color:var(--faint);
+    font:600 10px/1.4 var(--f-small);letter-spacing:.09em;text-transform:uppercase;
+    margin-bottom:3px}
+  .grid > .num{text-align:left}
+}
+@media (max-width:820px){
+  :root{--cols:repeat(2,minmax(0,1fr));--colgap:14px}
+}
+</style>
+<style>
+/* карточка — это <label>, поэтому сбрасываем стиль подписей полей */
+.card{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:10px 0 0;
+  background:var(--surface);display:flex;gap:14px;align-items:flex-start;
+  text-transform:none;letter-spacing:0;font:400 14px/1.5 var(--f-text);
+  color:var(--ink);cursor:pointer}
+.card:hover{border-color:var(--faint)}
+.card.gone{border-color:var(--warn);background:linear-gradient(0deg,var(--surface),var(--surface))}
+.card.gone .code{color:var(--warn)}
+.card input[type=checkbox]{margin-top:3px;flex:0 0 auto;width:16px;height:16px;accent-color:var(--lime)}
+.card .body{flex:1;min-width:0}
+.card .code{font:600 14.5px/1.3 var(--f-text);letter-spacing:.01em}
+.card .nm{color:var(--dim);font-size:13.5px;margin-top:3px;font-weight:400}
+.card .meta{display:block;color:var(--faint);font-size:12.5px;margin-top:6px}
+.card .n{color:var(--ink);font-variant-numeric:tabular-nums}
+.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-size:11.5px;
+  border:1px solid var(--warn);color:var(--warn);margin-left:8px;white-space:nowrap}
+.badge.ok{border-color:var(--line);color:var(--faint)}
+.kind{border-left:2px solid var(--lime);padding-left:12px;margin:16px 0 4px}
+.kind b{font-size:14.5px;text-transform:none;letter-spacing:0}
+.kind .meta{color:var(--faint);font-size:12.5px;margin-top:3px}
+</style>
+
+<body>
+
+<header>
+  <span class="mark"></span>
+  <b>Поиск медизделия</b>
+  <span class="ctx" id="ctx"></span>
+  <span class="sp"></span>
+  <span class="st" id="ver"></span>
+  <span class="st" id="status" role="status" aria-live="polite"
+        title="состояние реестра Росздравнадзора">проверяю, отвечает ли реестр…</span>
+  <button id="th" type="button">Светлая тема</button>
+</header>
+
+<div class="page">
+
+  <h1>Поиск медизделия</h1>
+  <p class="lede">Кто поставлял изделие по коду КТРУ или НКМИ и по каким ценам —
+    из реестра контрактов 44-ФЗ. Производитель и держатель РУ — из реестра
+    Росздравнадзора.</p>
+
+  <div id="alerts" style="margin-top:18px"></div>
+
+  <div class="panel setup">
+   <div>
+    <label for="ktru">Коды КТРУ или НКМИ</label>
+    <textarea id="ktru" spellcheck="false"
+      placeholder="32.50.11.000-00000080&#10;191220"></textarea>
+    <div class="hint">По одному в строке. Код вида по НКМИ — просто число.</div>
+    <div class="stack" style="margin-top:14px">
+      <button id="checkKtru" class="quiet small" type="button">Проверить коды</button>
+      <span class="hint" id="checkHint" style="margin:0;flex:1;min-width:180px">Что это
+        за позиция и сколько по ней контрактов.</span>
+    </div>
+    <div id="ktruCheck"></div>
+    <div class="stack hidden" id="pickBar" style="margin-top:14px">
+      <button id="usePicked" class="quiet small" type="button">Взять отмеченные коды</button>
+      <span class="hint" id="pickHint" style="margin:0"></span>
+    </div>
+   </div>
+
+   <div>
+    <div class="fields">
+      <div>
+        <label for="from">Дата, с</label>
+        <input type="text" id="from" value="01.01.2025" placeholder="ДД.ММ.ГГГГ">
+      </div>
+      <div>
+        <label for="to">по</label>
+        <input type="text" id="to" placeholder="можно не заполнять">
+      </div>
+      <div>
+        <label for="limit">Контрактов на код</label>
+        <input type="number" id="limit" value="0" min="0" step="10">
+        <div class="hint">0 — все.</div>
+      </div>
+    </div>
+
+    <div class="sect">Стадии контрактов</div>
+    <div class="stack" id="stages"></div>
+   </div>
+
+    <div class="stack full" style="margin-top:26px">
+      <button id="go" type="button">Найти поставщиков</button>
+      <button id="stop" class="quiet hidden" type="button">Остановить</button>
+      <span class="hint" id="elapsed" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="panel hidden" id="progress">
+    <div class="stage"><b id="stageText">Готовлюсь</b><span id="stagePct"></span></div>
+    <div class="bar"><i id="fill"></i></div>
+    <ol class="steps" id="steps"></ol>
+    <div class="hint">Окно можно свернуть — поиск от этого не прервётся.
+      Вернётесь на эту страницу и увидите результат.</div>
+  </div>
+
+  <div class="hidden" id="results">
+    <div id="notes" style="margin-top:22px"></div>
+
+    <div class="figures" id="figures"></div>
+
+    <div class="find">
+      <b style="font-size:15px">Производители</b>
+      <span class="chip on" data-top="5" role="button" tabindex="0" aria-pressed="true">Топ 5</span>
+      <span class="chip" data-top="10" role="button" tabindex="0" aria-pressed="false">Топ 10</span>
+      <span class="chip" data-top="0" role="button" tabindex="0" aria-pressed="false">Все</span>
+      <button id="dl" class="small" type="button">Скачать XLSX</button>
+      <span class="count" id="manCount"></span>
+    </div>
+
+    <div class="scrollbox"><div id="tabMan"></div></div>
+  </div>
+
+  <div class="panel hidden" id="histPanel">
+    <div class="sect" style="margin-top:0">Последние отчёты</div>
+    <div class="hist" id="hist"></div>
+  </div>
+
+  <div class="panel">
+    <div class="stack">
+      <button id="cacheClear" class="quiet small" type="button">Очистить кэш</button>
+      <span class="hint" style="margin:0;flex:1;min-width:200px">Программа сама сжимает
+        кэш, когда он разрастается. Чистить вручную нужно, только если контракт
+        в ЕИС изменили, а программа показывает прежнее.</span>
+    </div>
+  </div>
+</div>
+
+<div id="dlg" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+  <div class="box">
+    <h2 id="dlgTitle"></h2>
+    <div id="dlgBody" class="body"></div>
+    <div class="foot">
+      <button class="quiet" id="dlgNo" type="button">Отмена</button>
+      <button id="dlgYes" type="button">Хорошо</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = v => (v === null || v === undefined || v === '') ? '—'
+  : Number(v).toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2});
+const num = v => (v === null || v === undefined || v === '') ? '—'
+  : Number(v).toLocaleString('ru-RU');
+function plural(n, one, few, many){
+  const m10 = n % 10, m100 = n % 100;
+  if(m10 === 1 && m100 !== 11) return one;
+  if(m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+
+function applyTheme(t){
+  if(t === 'light') document.documentElement.dataset.theme = 'light';
+  else document.documentElement.removeAttribute('data-theme');
+  const b = $('#th');
+  if(b) b.textContent = (t === 'light') ? 'Тёмная тема' : 'Светлая тема';
+  try{ localStorage.setItem('theme', t || 'dark'); }catch(e){}
+}
+try{ applyTheme(localStorage.getItem('theme') === 'light' ? 'light' : 'dark'); }
+catch(e){ applyTheme('dark'); }
+$('#th').onclick = () => applyTheme(
+  document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+
+function toast(text, bad){
+  const el = document.createElement('div');
+  el.className = 'toast' + (bad ? ' bad' : '');
+  el.innerHTML = '<div style="flex:1">' + esc(text) + '</div>' +
+                 '<button class="quiet" type="button">Скрыть</button>';
+  el.querySelector('button').onclick = () => el.remove();
+  $('#toasts').appendChild(el);
+  if(!bad) setTimeout(() => el.remove(), 9000);
+}
+
+function ask(title, body, yes){
+  return new Promise(resolve => {
+    $('#dlgTitle').textContent = title;
+    $('#dlgBody').innerHTML = body;
+    $('#dlgYes').textContent = yes || 'Хорошо';
+    $('#dlg').classList.remove('hidden');
+    const close = v => { $('#dlg').classList.add('hidden'); resolve(v); };
+    $('#dlgYes').onclick = () => close(true);
+    $('#dlgNo').onclick = () => close(false);
+  });
+}
+
+async function api(url, opts){
+  const r = await fetch(url, opts);
+  let data = null;
+  try{ data = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error((data && data.detail) || ('Ошибка ' + r.status));
+  return data;
+}
+
+/* ── состояние и стадии ─────────────────────────────────────────── */
+
+let STAGES = {};
+let CURRENT_JOB = '';
+let LAST = null;
+let TOP = 5;
+
+async function loadStatus(){
+  try{
+    const st = await api('/api/status');
+    STAGES = st.stages || {};
+    renderStages(['0','1','2']);
+    $('#status').textContent = st.rzn && st.rzn.ok
+      ? 'реестр Росздравнадзора отвечает'
+      : 'реестр Росздравнадзора не отвечает — производитель может не найтись';
+    showUpdate(st.update);
+  }catch(e){
+    $('#status').textContent = 'программа не отвечает: ' + e.message;
+  }
+}
+
+function showUpdate(u){
+  if(!u) return;
+  const ver = $('#ver');
+  if(ver) ver.textContent = 'версия ' + (u.version || '');
+  if(!u.new || !u.url) return;
+  $('#alerts').innerHTML =
+    '<div class="note"><b>Вышла новая версия ' + esc(u.latest) + '</b>' +
+    'У вас ' + esc(u.version) + '. Скачайте новый файл и замените им старый — ' +
+    'папки data и out трогать не нужно. ' +
+    '<a href="' + esc(u.url) + '" target="_blank" rel="noopener">Страница загрузки</a>' +
+    '</div>';
+}
+
+function renderStages(checked){
+  const box = $('#stages');
+  box.innerHTML = Object.entries(STAGES).map(([k, v]) =>
+    '<label class="chk"><input type="checkbox" value="' + esc(k) + '"' +
+    (checked.includes(k) ? ' checked' : '') + '> ' + esc(v) + '</label>').join('');
+}
+
+const stagesPicked = () => $$('#stages input:checked').map(i => i.value);
+
+function params(){
+  return {
+    ktru: $('#ktru').value,
+    date_from: $('#from').value.trim() || '01.01.2025',
+    date_to: $('#to').value.trim(),
+    stages: stagesPicked(),
+    limit_per_ktru: Number($('#limit').value || 0),
+  };
+}
+
+/* ── проверка кодов ─────────────────────────────────────────────── */
+
+$('#checkKtru').onclick = async () => {
+  const box = $('#ktruCheck');
+  $('#pickBar').classList.add('hidden');
+  box.innerHTML = '<div class="hint">проверяю в каталоге ЕИС…</div>';
+  try{
+    const p = params();
+    const res = await api('/api/ktru-check', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ktru: p.ktru, date_from: p.date_from,
+                            date_to: p.date_to, stages: p.stages}),
+    });
+    box.innerHTML = renderCheck(res);
+    const hasCodes = (res.codes || []).length > 0;
+    $('#pickBar').classList.toggle('hidden', !hasCodes);
+    if(hasCodes) updatePickHint();
+    $$('#ktruCheck input[type=checkbox]').forEach(c => c.onchange = updatePickHint);
+  }catch(e){
+    box.innerHTML = '<div class="note warn">' + esc(e.message) + '</div>';
+  }
+};
+
+function renderCheck(res){
+  let out = '';
+  for(const k of (res.nkmi || [])){
+    const n = (k.confirmed || []).length;
+    out += '<div class="kind"><b>НКМИ ' + esc(k.code) +
+           (k.name ? ' — ' + esc(k.name) : '') + '</b>' +
+           '<div class="meta">' + (n
+             ? 'в ЕИС этому виду соответствует ' + n + ' ' +
+               plural(n, 'позиция каталога', 'позиции каталога', 'позиций каталога') +
+               ' — отметьте нужные'
+             : esc(k.note || 'позиций каталога с этим видом не нашлось')) +
+           '</div></div>';
+  }
+
+  for(const c of (res.codes || [])){
+    const gone = !!c.excluded;
+    const live = c.ok && c.contracts > 0;
+    out += '<label class="card' + (gone ? ' gone' : '') + '">' +
+      '<input type="checkbox" value="' + esc(c.code) + '"' + (live ? ' checked' : '') + '>' +
+      '<div class="body">' +
+        '<div class="code">' + esc(c.code) +
+          (gone ? '<span class="badge">исключён из каталога ' + esc(c.excluded) + '</span>'
+                : (c.kind_ok ? '<span class="badge ok">вид подтверждён</span>' : '')) +
+        '</div>' +
+        (c.name ? '<div class="nm">' + esc(c.name) + '</div>' : '') +
+        '<div class="meta">' + (c.ok
+          ? 'контрактов за период: <span class="n">' + num(c.contracts) + '</span>' +
+            (c.contracts_all && c.contracts_all !== c.contracts
+              ? ' · всего по коду ' + num(c.contracts_all) : '') +
+            (c.unit ? ' · ' + esc(c.unit) : '')
+          : esc(c.note || 'позиция в каталоге не найдена')) +
+        (gone ? '<div style="color:var(--warn);margin-top:5px">Позиция исключена ' +
+                'из каталога: новых контрактов по ней не появится, старые ищутся ' +
+                'как обычно.</div>' : '') +
+        (c.ok && c.note ? '<div style="margin-top:5px">' + esc(c.note) + '</div>' : '') +
+        '</div>' +
+      '</div></label>';
+  }
+
+  for(const b of (res.bad || [])){
+    out += '<div class="note warn"><b>' + esc(b) + '</b>это не похоже на код КТРУ. ' +
+           'Формат: 32.50.11.000-00000080</div>';
+  }
+  return out || '<div class="hint">кодов не нашлось</div>';
+}
+
+const pickedCodes = () => $$('#ktruCheck input[type=checkbox]:checked').map(i => i.value);
+
+function updatePickHint(){
+  const n = pickedCodes().length;
+  $('#pickHint').textContent = n
+    ? 'отмечено ' + n + ' ' + plural(n, 'код', 'кода', 'кодов')
+    : 'ничего не отмечено';
+}
+
+$('#usePicked').onclick = () => {
+  const codes = pickedCodes();
+  if(!codes.length){ toast('Отметьте хотя бы один код', true); return; }
+  $('#ktru').value = codes.join('\n');
+  toast('В поле поиска ' + codes.length + ' ' +
+        plural(codes.length, 'код', 'кода', 'кодов') + '. Можно искать.');
+};
+
+/* ── прогон ─────────────────────────────────────────────────────── */
+
+const STEP_NAMES = [
+  ['поиск', 'Поиск контрактов в ЕИС'],
+  ['контракты', 'Загрузка контрактов'],
+  ['НМЦК', 'Начальные цены закупок'],
+  ['спецификации', 'Спецификации из приложений'],
+  ['РЗН', 'Реестр Росздравнадзора'],
+  ['вид', 'Срез реестра по коду вида'],
+];
+let stepDone = new Set();
+
+function renderSteps(active){
+  $('#steps').innerHTML = STEP_NAMES.map(([key, title]) => {
+    const done = stepDone.has(key);
+    const now = key === active;
+    return '<li class="' + (done ? 'done' : '') + '"><span class="t">' +
+           (done ? '✓' : (now ? '▸' : '·')) + '</span>' + esc(title) + '</li>';
+  }).join('');
+}
+
+let timer = null, startedAt = 0;
+
+function startClock(){
+  startedAt = Date.now();
+  clearInterval(timer);
+  timer = setInterval(() => {
+    const s = Math.round((Date.now() - startedAt) / 1000);
+    $('#elapsed').textContent = 'идёт ' + Math.floor(s / 60) + ' мин ' + (s % 60) + ' с';
+  }, 1000);
+}
+
+function stopClock(){ clearInterval(timer); timer = null; }
+
+$('#go').onclick = async () => {
+  const p = params();
+  if(!p.ktru.trim()){ toast('Укажите хотя бы один код КТРУ или НКМИ', true); return; }
+  if(!p.stages.length){ toast('Выберите хотя бы одну стадию контракта', true); return; }
+  $('#go').disabled = true;
+  try{
+    const res = await api('/api/run', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(p),
+    });
+    attach(res.job);
+  }catch(e){
+    toast(e.message, true);
+    $('#go').disabled = false;
+  }
+};
+
+$('#stop').onclick = async () => {
+  if(!CURRENT_JOB) return;
+  try{
+    const r = await api('/api/stop/' + CURRENT_JOB, {method: 'POST'});
+    toast(r.message);
+  }catch(e){ toast(e.message, true); }
+};
+
+function attach(job){
+  CURRENT_JOB = job;
+  stepDone = new Set();
+  LAST = null;
+  $('#results').classList.add('hidden');
+  $('#progress').classList.remove('hidden');
+  $('#go').disabled = true;
+  $('#stop').classList.remove('hidden');
+  renderSteps('');
+  startClock();
+
+  const src = new EventSource('/api/events/' + job);
+  src.onmessage = ev => {
+    let item;
+    try{ item = JSON.parse(ev.data); }catch(e){ return; }
+    if(item.kind === 'progress') onProgress(item);
+    else if(item.kind === 'done') onDone(item);
+    else if(item.kind === 'error') onError(item.message);
+  };
+  src.addEventListener('eof', () => { src.close(); finish(); });
+  src.onerror = () => {};
+}
+
+function onProgress(p){
+  const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+  $('#stageText').textContent = p.text || p.stage;
+  $('#stagePct').textContent = pct + '%';
+  $('#fill').style.width = pct + '%';
+  for(const [key] of STEP_NAMES){
+    if(key === p.stage) break;
+    stepDone.add(key);
+  }
+  renderSteps(p.stage);
+}
+
+function finish(){
+  stopClock();
+  $('#go').disabled = false;
+  $('#stop').classList.add('hidden');
+  $('#progress').classList.add('hidden');
+  loadReports();
+}
+
+function onError(message){
+  $('#elapsed').textContent = '';
+  toast(message, true);
+}
+
+function onDone(item){
+  LAST = item;
+  $('#elapsed').textContent = '';
+  if(!item.rows){
+    $('#results').classList.add('hidden');
+    toast('По этим кодам за выбранный период контрактов не нашлось. ' +
+          'Проверьте код в каталоге ТРУ и период.', true);
+    return;
+  }
+  renderResults(item);
+  $('#results').classList.remove('hidden');
+}
+
+/* ── результат ──────────────────────────────────────────────────── */
+
+function fig(value, key, small){
+  return '<div class="fig"><div class="v">' + value +
+         (small ? '<small>' + small + '</small>' : '') +
+         '</div><div class="k">' + key + '</div></div>';
+}
+
+function renderResults(item){
+  const s = item.summary || {};
+  const figs = [
+    fig(num(s.positions), 'позиций в отчёте'),
+    fig(num(s.contracts), 'контрактов'),
+    fig(num(s.producers), 'производителей'),
+    fig(num(s.with_manufacturer), 'с производителем', s.with_manufacturer_pct + '%'),
+    fig(num(s.with_ru), 'с номером РУ', s.with_ru_pct + '%'),
+    fig(money(s.sum), 'сумма по позициям, ₽'),
+  ];
+  if(s.discount !== null && s.discount !== undefined)
+    figs.push(fig(s.discount + '%', 'снижение, медиана'));
+  $('#figures').innerHTML = figs.join('');
+
+  let notes = '';
+  if(s.first) notes += '<div class="note"><b>Период поставок</b>с ' + esc(s.first) +
+                       ' по ' + esc(s.last) + '. ' + esc(s.discount_note || '') + '</div>';
+  for(const r of (item.remarks || []))
+    notes += '<div class="note warn">' + esc(r) + '</div>';
+  for(const n of (item.problem_notes || []))
+    notes += '<div class="note">' + esc(n) + '</div>';
+  if(item.save_error) notes += '<div class="note warn">' + esc(item.save_error) + '</div>';
+  $('#notes').innerHTML = notes;
+
+  renderProducers();
+}
+
+function renderProducers(){
+  if(!LAST) return;
+  const all = LAST.producers || [];
+  const list = TOP ? all.slice(0, TOP) : all;
+  $('#manCount').textContent = 'показано ' + list.length + ' из ' + all.length + ' ' +
+    plural(all.length, 'производителя', 'производителей', 'производителей');
+  if(!list.length){ $('#tabMan').innerHTML = '<div class="hint">пусто</div>'; return; }
+
+  const rows = list.map(m => {
+    const name = m.unknown ? '<span class="guess">' + esc(m.name) + '</span>' : esc(m.name);
+    return '<tr>' +
+      '<td>' + name + (m.declarant ? '<div class="what">держатель РУ: ' +
+                                     esc(m.declarant) + '</div>' : '') + '</td>' +
+      '<td class="num">' + num(m.positions) + '</td>' +
+      '<td class="num">' + num(m.contracts) + '</td>' +
+      '<td class="num">' + num(m.units) + '</td>' +
+      '<td class="num">' + money(m.sum) + '</td>' +
+      '<td class="num">' + m.share + '%</td>' +
+      '<td>' + (m.ru && m.ru.length ? esc(m.ru.join(', ')) : '—') + '</td>' +
+      '</tr>';
+  }).join('');
+
+  $('#tabMan').innerHTML =
+    '<table class="tbl"><thead><tr>' +
+    '<th>Производитель</th><th class="num">Позиций</th><th class="num">Контрактов</th>' +
+    '<th class="num">Единиц</th><th class="num">Сумма, ₽</th><th class="num">Доля</th>' +
+    '<th>№ РУ</th></tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+$$('[data-top]').forEach(chip => {
+  chip.onclick = () => {
+    $$('[data-top]').forEach(c => { c.classList.remove('on'); c.setAttribute('aria-pressed', 'false'); });
+    chip.classList.add('on');
+    chip.setAttribute('aria-pressed', 'true');
+    TOP = Number(chip.dataset.top);
+    renderProducers();
+  };
+});
+
+$('#dl').onclick = () => {
+  if(!CURRENT_JOB) return;
+  window.location = '/api/download/' + CURRENT_JOB;
+};
+
+/* ── прошлые отчёты ─────────────────────────────────────────────── */
+
+async function loadReports(){
+  try{
+    const r = await api('/api/reports?limit=20');
+    const items = r.reports || [];
+    if(!items.length){ $('#histPanel').classList.add('hidden'); return; }
+    $('#hist').innerHTML = items.map(x => {
+      const when = (x.saved || '').replace('T', ' ').slice(0, 16);
+      const rows = x.rows ? num(x.rows) + ' ' + plural(x.rows, 'позиция', 'позиции', 'позиций') : '';
+      return '<div class="item" data-file="' + esc(x.file) + '">' +
+             '<span class="c-date">' + esc(when) + '</span>' +
+             '<span style="flex:1">' + esc(x.note || x.file) + '</span>' +
+             '<span class="hint" style="margin:0">' + rows + ' · ' + num(x.size_kb) + ' КБ</span>' +
+             '<span class="chip small">Скачать</span></div>';
+    }).join('');
+    $$('#hist .item').forEach(el => {
+      el.onclick = () => { window.location = '/api/file/' + encodeURIComponent(el.dataset.file); };
+    });
+    $('#histPanel').classList.remove('hidden');
+  }catch(e){ $('#histPanel').classList.add('hidden'); }
+}
+
+/* ── кэш ────────────────────────────────────────────────────────── */
+
+$('#cacheClear').onclick = async () => {
+  let info;
+  try{ info = await api('/api/cache'); }
+  catch(e){ toast(e.message, true); return; }
+  const rows = (info.areas || []).reduce((s, a) => s + (a.rows || 0), 0);
+  const ok = await ask('Очистить кэш?',
+    '<p>Сейчас в кэше <b>' + num(rows) + '</b> ' +
+    plural(rows, 'запись', 'записи', 'записей') + ' — <b>' + info.size_mb + ' МБ</b>.</p>' +
+    '<p>Это скачанные страницы ЕИС и ответы реестра Росздравнадзора. ' +
+    'После очистки ближайший поиск пойдёт заново по сети и займёт заметно больше ' +
+    'времени, зато покажет свежие данные. Готовые отчёты в папке out не пострадают.</p>' +
+    '<p class="hint" style="margin:0">Обычно чистить не нужно: программа сама ' +
+    'сжимает кэш, когда он разрастается.</p>',
+    'Очистить');
+  if(!ok) return;
+  try{
+    const r = await api('/api/cache/clear', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({areas: []}),
+    });
+    const gone = Object.values(r.removed || {}).reduce((a, b) => a + b, 0);
+    toast('Кэш очищен: удалено ' + num(gone) + ' ' +
+          plural(gone, 'запись', 'записи', 'записей') +
+          ', на диске осталось ' + r.size_mb + ' МБ');
+  }catch(e){ toast(e.message, true); }
+};
+
+/* ── программа закрывается вместе со страницей ──────────────────── */
+
+function heartbeat(){
+  const ping = () => fetch('/api/alive', {method: 'POST'}).catch(() => {});
+  ping();
+  setInterval(ping, 10000);
+}
+
+/* ── старт ──────────────────────────────────────────────────────── */
+
+async function boot(){
+  heartbeat();
+  await loadStatus();
+  loadReports();
+  try{
+    const cur = await api('/api/current');
+    if(cur.job){
+      $('#ctx').textContent = cur.note || '';
+      attach(cur.job);
+    } else if(cur.last){
+      const st = await api('/api/job/' + cur.last);
+      if(st.summary && st.summary.rows){
+        CURRENT_JOB = cur.last;
+        $('#ctx').textContent = st.note || '';
+        onDone(st.summary);
+        $('#results').classList.remove('hidden');
+      }
+    }
+  }catch(e){}
+}
+boot();
+</script>
+</body>
+</html>

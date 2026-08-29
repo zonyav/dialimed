@@ -1,0 +1,10 @@
+data/
+out/
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec.bak
+release/
+app/_build.py

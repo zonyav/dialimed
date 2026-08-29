@@ -1,0 +1,65 @@
+name: Сборка exe
+
+# Запускается двумя способами:
+#   1) вы создаёте тег версии:  git tag v1.0.1 && git push origin v1.0.1
+#   2) вручную: вкладка Actions -> «Сборка exe» -> Run workflow
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Установить зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Проверки
+        run: python tests/t_check.py
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Записать версию и адрес репозитория в сборку
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v\d') { $tag = "dev-$($env:GITHUB_RUN_NUMBER)" }
+          $version = $tag -replace '^v', ''
+          "VERSION = '$version'"                     | Out-File app/_build.py -Encoding utf8
+          "REPO = '${{ github.repository }}'"        | Out-File app/_build.py -Encoding utf8 -Append
+          echo "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Собрать exe
+        run: python -m PyInstaller --noconfirm Medizdeliya.spec
+
+      - name: Назвать файл с номером версии
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item dist/Medizdeliya.exe "release/Medizdeliya-$env:VERSION.exe"
+
+      - name: Приложить файл к сборке
+        uses: actions/upload-artifact@v4
+        with:
+          name: Medizdeliya-${{ env.VERSION }}
+          path: release/*.exe
+
+      - name: Опубликовать релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.exe
+          generate_release_notes: true
