@@ -526,52 +526,14 @@ def _summary(res: RunResult) -> dict:
     }
 
 
-def _group_titles(names: list[str]) -> tuple[dict[str, str], set[str]]:
-    """Разложить написания по группам: сначала ручные, потом очевидные дубли.
-
-    Очевидные — это те, что отличаются только организационной формой,
-    кавычками или регистром: «ООО "ДИКСИОН"» и «Диксион, ООО». Всё
-    остальное («Диксион» и «Dixion») человек объединяет сам.
-    """
-
-    manual = groups.index()
-    title_of: dict[str, str] = {}
-    by_manual: set[str] = set()
-    auto: dict[str, list[str]] = defaultdict(list)
-
-    for name in names:
-        if not name:
-            continue
-        title = manual.get(groups.key(name))
-        if title:
-            title_of[name] = title
-            by_manual.add(title)
-        else:
-            auto[groups.key(name)].append(name)
-
-    for same in auto.values():
-        title_of.update(dict.fromkeys(same, same[0]))
-    return title_of, by_manual
-
-
 def _producers(res: RunResult) -> list[dict]:
 
     by_name: dict[str, list] = defaultdict(list)
     for r in res.rows:
         by_name[r.pos.manufacturer or ""].append(r)
 
-    title_of, by_manual = _group_titles(list(by_name))
-
-    # имя группы — самое частое написание, если человек не задал своё
-    by_title: dict[str, list[str]] = defaultdict(list)
-    for name, title in title_of.items():
-        by_title[title].append(name)
-    for title, same in by_title.items():
-        if title in by_manual or len(same) < 2:
-            continue
-        best = max(same, key=lambda n: (len(by_name[n]), -len(n)))
-        for name in same:
-            title_of[name] = best
+    title_of = groups.assign(r.pos.manufacturer for r in res.rows)
+    by_manual = set(groups.load())
 
     grouped: dict[str, list] = defaultdict(list)
     members: dict[str, list[str]] = defaultdict(list)

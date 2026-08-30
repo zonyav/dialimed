@@ -56,6 +56,36 @@ def index() -> dict[str, str]:
     return out
 
 
+def assign(names) -> dict[str, str]:
+    """Написание -> имя группы, куда оно попадает.
+
+    Сначала объединения, сделанные руками, потом очевидные дубли: они
+    отличаются только организационной формой, кавычками или регистром.
+    Имя автоматической группы — самое частое написание.
+    """
+
+    counted: dict[str, int] = {}
+    for name in names:
+        if name:
+            counted[name] = counted.get(name, 0) + 1
+
+    manual = index()
+    title_of: dict[str, str] = {}
+    auto: dict[str, list[str]] = {}
+    for name in counted:
+        found = manual.get(key(name))
+        if found:
+            title_of[name] = found
+        else:
+            auto.setdefault(key(name), []).append(name)
+
+    for same in auto.values():
+        best = max(same, key=lambda n: (counted[n], -len(n)))
+        for name in same:
+            title_of[name] = best
+    return title_of
+
+
 def merge(names: list[str], title: str = "") -> str:
     """Свести написания в одну группу. Имя по умолчанию — первое из списка."""
 

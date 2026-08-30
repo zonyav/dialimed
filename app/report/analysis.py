@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import statistics
-from typing import Iterable
+from typing import Iterable, Optional
 
 from ..models import DASH, NO_BIDDING, NO_NMCK, SMALL_VOLUME, Row
 
@@ -137,3 +137,80 @@ def price_flag(row: Row, bounds: dict[tuple[str, str, str], tuple]) -> str:
     if p.price < low:
         return "дёшево"
     return ""
+
+
+# ── Сводка по рынку ─────────────────────────────────────────────────────
+# Считаем по позициям, а не по контрактам: цена контракта повторяется
+# в каждой его строке, складывать её нельзя.
+
+def _median(values: list[float]) -> Optional[float]:
+    return statistics.median(values) if values else None
+
+
+def market_summary(rows: list[Row]) -> dict:
+
+    from .. import groups
+
+    titles = groups.assign(r.pos.manufacturer for r in rows)
+
+    contracts = {r.meta.reestr_number for r in rows if r.meta.reestr_number}
+    money = sum(r.pos.total or 0 for r in rows)
+    units = sum(r.pos.quantity or 0 for r in rows)
+    prices = [r.pos.price for r in rows if r.pos.price]
+    drops = [r.meta.discount_pct for r in rows if r.meta.discount_pct is not None]
+    known = [r for r in rows if r.pos.manufacturer]
+
+    by_maker: dict[str, list[Row]] = {}
+    for r in rows:
+        by_maker.setdefault(titles.get(r.pos.manufacturer, ""), []).append(r)
+
+    makers = []
+    for name, group in by_maker.items():
+        got = sum(x.pos.total or 0 for x in group)
+        makers.append({
+            "name": name or "производитель не определён",
+            "unknown": not name,
+            "positions": len(group),
+            "contracts": len({x.meta.reestr_number for x in group
+                              if x.meta.reestr_number}),
+            "units": round(sum(x.pos.quantity or 0 for x in group), 2),
+            "sum": round(got, 2),
+            "share": round(100 * got / money, 1) if money else 0.0,
+            "price": _median([x.pos.price for x in group if x.pos.price]),
+        })
+    makers.sort(key=lambda m: (m["unknown"], -m["sum"]))
+
+    months: dict[str, dict] = {}
+    for r in rows:
+        day = r.meta.conclusion_date
+        if day is None:
+            continue
+        cell = months.setdefault(f"{day.year}-{day.month:02d}",
+                                 {"month": f"{day.month:02d}.{day.year}",
+                                  "contracts": set(), "sum": 0.0, "units": 0.0})
+        cell["contracts"].add(r.meta.reestr_number)
+        cell["sum"] += r.pos.total or 0
+        cell["units"] += r.pos.quantity or 0
+
+    timeline = []
+    for key in sorted(months):
+        cell = months[key]
+        timeline.append({
+            "month": cell["month"],
+            "contracts": len(cell["contracts"]),
+            "sum": round(cell["sum"], 2),
+            "price": round(cell["sum"] / cell["units"], 2) if cell["units"] else None,
+        })
+
+    return {
+        "contracts": len(contracts),
+        "positions": len(rows),
+        "units": round(units, 2),
+        "sum": round(money, 2),
+        "price": _median(prices),
+        "drop": _median(drops),
+        "makers_known": sum(1 for m in makers if not m["unknown"]),
+        "known_share": round(100 * len(known) / len(rows), 1) if rows else 0.0,
+        "makers": makers,
+        "timeline": timeline,
+    }
