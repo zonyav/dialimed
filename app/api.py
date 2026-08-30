@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import statistics
 import time
 import uuid
 from collections import defaultdict
@@ -543,10 +544,11 @@ def _producers(res: RunResult) -> list[dict]:
         if name:
             members[title].append(name)
 
-    total = len(res.rows)
+    money = sum(x.pos.total or 0 for x in res.rows)
     out = []
     for name, rs in grouped.items():
-        prices = [x.pos.price for x in rs if x.pos.price is not None]
+        prices = sorted(x.pos.price for x in rs if x.pos.price is not None)
+        got = sum(x.pos.total or 0 for x in rs)
         spellings = sorted(members.get(name, []),
                            key=lambda n: (-len(by_name[n]), n.lower()))
         out.append({
@@ -555,10 +557,11 @@ def _producers(res: RunResult) -> list[dict]:
             "positions": len(rs),
             "contracts": len({_contract_key(x) for x in rs}),
             "units": round(sum(x.pos.quantity or 0 for x in rs), 2),
-            "sum": round(sum(x.pos.total or 0 for x in rs), 2),
-            "share": round(100 * len(rs) / total, 1) if total else 0,
-            "price_min": min(prices) if prices else None,
-            "price_max": max(prices) if prices else None,
+            "sum": round(got, 2),
+            "share": round(100 * got / money, 1) if money else 0,
+            "price": statistics.median(prices) if prices else None,
+            "price_min": prices[0] if prices else None,
+            "price_max": prices[-1] if prices else None,
             "declarant": next((x.pos.declarant for x in rs if x.pos.declarant), ""),
             "ru": sorted({x.pos.ru_number for x in rs if x.pos.ru_number})[:5],
             "spellings": [{"name": n, "positions": len(by_name[n])}

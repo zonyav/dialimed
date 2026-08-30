@@ -4,8 +4,6 @@ from pathlib import Path
 from typing import Optional
 
 from openpyxl import Workbook
-from openpyxl.chart import BarChart, PieChart, Reference
-from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -150,7 +148,6 @@ def _sheet_summary(ws: Worksheet, result: RunResult, note: str) -> None:
     row += 1
     _head_row(ws, row, ["Производитель", "Позиций", "Контрактов", "Единиц",
                         "Сумма, ₽", "Доля рынка", "Цена за ед., ₽"])
-    first = row + 1
 
     shown = [m for m in data["makers"] if not m["unknown"]][:TOP_MAKERS]
     rest = [m for m in data["makers"] if m not in shown]
@@ -183,14 +180,11 @@ def _sheet_summary(ws: Worksheet, result: RunResult, note: str) -> None:
         ws.cell(row=row, column=6).number_format = PERCENT
         ws.cell(row=row, column=7).number_format = SUM_MONEY
 
-    _pie(ws, first, row)
-
     row += 2
     head = ws.cell(row=row, column=1, value="Как шли закупки по месяцам")
     head.font = HEAD2_FONT
     row += 1
     _head_row(ws, row, ["Месяц", "Контрактов", "Сумма, ₽", "Цена за ед., ₽"])
-    first_month = row + 1
     for n, month in enumerate(data["timeline"]):
         row += 1
         for i, value in enumerate([month["month"], month["contracts"],
@@ -205,36 +199,6 @@ def _sheet_summary(ws: Worksheet, result: RunResult, note: str) -> None:
                 cell.fill = BAND_FILL
         ws.cell(row=row, column=3).number_format = SUM_MONEY
         ws.cell(row=row, column=4).number_format = SUM_MONEY
-
-    if row >= first_month:
-        _bars(ws, first_month, row)
-
-
-def _pie(ws: Worksheet, first: int, last: int) -> None:
-    if last < first:
-        return
-    chart = PieChart()
-    chart.title = "Доля рынка по сумме"
-    chart.height, chart.width = 8.6, 12.5
-    chart.add_data(Reference(ws, min_col=5, min_row=first, max_row=last),
-                   titles_from_data=False)
-    chart.set_categories(Reference(ws, min_col=1, min_row=first, max_row=last))
-    chart.dataLabels = DataLabelList()
-    chart.dataLabels.showPercent = True
-    ws.add_chart(chart, "I3")
-
-
-def _bars(ws: Worksheet, first: int, last: int) -> None:
-    chart = BarChart()
-    chart.type = "col"
-    chart.title = "Сумма закупок по месяцам, ₽"
-    chart.height, chart.width = 8.6, 12.5
-    chart.legend = None
-    chart.y_axis.numFmt = "#,##0"
-    chart.add_data(Reference(ws, min_col=3, min_row=first, max_row=last),
-                   titles_from_data=False)
-    chart.set_categories(Reference(ws, min_col=1, min_row=first, max_row=last))
-    ws.add_chart(chart, "I21")
 
 
 def build_workbook(result: RunResult, params_note: str = "") -> Workbook:

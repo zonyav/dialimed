@@ -319,6 +319,20 @@ input:focus,textarea:focus{outline:2px solid var(--lime);outline-offset:-2px;
   white-space:nowrap}
 .tbl td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
 .tbl tbody tr:hover > td{background:var(--raised)}
+.chart{display:flex;gap:30px;align-items:center;flex-wrap:wrap;
+  margin:4px 0 20px;color:var(--ink)}
+.legend{flex:1;min-width:280px;display:grid;gap:8px}
+.legend .row{display:grid;grid-template-columns:12px 1fr 62px auto;gap:12px;
+  align-items:center;font-size:13px}
+.legend .row.head{color:var(--faint);font-size:11px;text-transform:uppercase;
+  letter-spacing:.08em}
+.legend .dot{width:11px;height:11px;border-radius:3px}
+.legend .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.legend .pc{text-align:right;font-variant-numeric:tabular-nums;color:var(--dim)}
+.legend .sm{text-align:right;font-variant-numeric:tabular-nums;color:var(--faint)}
+.tbl th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+.tbl th.sortable:hover{color:var(--ink)}
+.tbl th .ar{opacity:.6;font-size:9px;margin-left:4px}
 .tbl td.pick{width:34px;padding-right:0}
 .tbl input[type=checkbox]{width:15px;height:15px;accent-color:var(--lime);cursor:pointer}
 .spell{display:block;margin-top:5px;color:var(--faint);font-size:12px;line-height:1.5}
@@ -511,6 +525,8 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
       <button id="dl" class="small" type="button">Скачать XLSX</button>
       <span class="count" id="manCount"></span>
     </div>
+
+    <div id="chart"></div>
 
     <div class="stack hidden" id="mergeBar" style="margin:0 0 12px">
       <button id="doMerge" class="quiet small" type="button">Объединить отмеченные</button>
@@ -962,18 +978,130 @@ function renderResults(item){
   renderProducers();
 }
 
+/* ── сводка: доля рынка и таблица производителей ────────────────── */
+
+/* цвета подобраны так, чтобы соседние доли не сливались */
+const pct = v => (Number(v) || 0).toFixed(1).replace('.', ',') + ' %';
+
+const PIE_COLORS = ['#4E79A7', '#F28E2B', '#59A14F', '#E15759', '#B07AA1',
+                    '#EDC948', '#76B7B2', '#FF9DA7', '#9C755F'];
+const PIE_REST = '#8A8F98';
+const PIE_TOP = 8;
+
+let SORT = {key: 'sum', dir: -1};
+
+function pieData(all){
+  const known = all.filter(m => !m.unknown && m.sum > 0)
+                   .sort((a, b) => b.sum - a.sum);
+  const head = known.slice(0, PIE_TOP);
+  const tail = known.slice(PIE_TOP);
+  const others = all.filter(m => m.unknown).concat(tail);
+  const items = head.map((m, i) => ({
+    name: m.name, value: m.sum, color: PIE_COLORS[i % PIE_COLORS.length],
+  }));
+  const rest = others.reduce((a, m) => a + (m.sum || 0), 0);
+  if(rest > 0){
+    items.push({
+      name: others.length === 1 ? others[0].name : 'остальные',
+      value: rest, color: PIE_REST,
+    });
+  }
+  return items;
+}
+
+function donut(items){
+  const size = 232, r = 108, ri = 68, c = size / 2;
+  const total = items.reduce((a, x) => a + x.value, 0);
+  if(!total) return '';
+  const ring = (color) =>
+    '<circle cx="' + c + '" cy="' + c + '" r="' + ((r + ri) / 2) + '" fill="none" ' +
+    'stroke="' + color + '" stroke-width="' + (r - ri) + '"></circle>';
+
+  let out = '';
+  if(items.length === 1){
+    out = ring(items[0].color);
+  } else {
+    let a0 = -Math.PI / 2;
+    for(const x of items){
+      const a1 = a0 + 2 * Math.PI * x.value / total;
+      const big = (a1 - a0) > Math.PI ? 1 : 0;
+      const pt = (rad, a) => (c + rad * Math.cos(a)).toFixed(2) + ' ' +
+                             (c + rad * Math.sin(a)).toFixed(2);
+      out += '<path d="M ' + pt(r, a0) + ' A ' + r + ' ' + r + ' 0 ' + big + ' 1 ' +
+             pt(r, a1) + ' L ' + pt(ri, a1) + ' A ' + ri + ' ' + ri + ' 0 ' + big +
+             ' 0 ' + pt(ri, a0) + ' Z" fill="' + x.color + '"></path>';
+      a0 = a1;
+    }
+  }
+  return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="' + size +
+         '" height="' + size + '" role="img" aria-label="доля рынка по сумме">' +
+         out +
+         '<text x="' + c + '" y="' + (c - 4) + '" text-anchor="middle" ' +
+         'fill="currentColor" font-size="17" font-weight="600">' +
+         esc(money(total)) + '</text>' +
+         '<text x="' + c + '" y="' + (c + 16) + '" text-anchor="middle" ' +
+         'fill="currentColor" opacity=".55" font-size="11">всего закуплено</text>' +
+         '</svg>';
+}
+
+function renderChart(all){
+  const items = pieData(all);
+  if(items.length < 2){ $('#chart').innerHTML = ''; return; }
+  const total = items.reduce((a, x) => a + x.value, 0);
+  const legend = items.map(x =>
+    '<div class="row">' +
+    '<span class="dot" style="background:' + x.color + '"></span>' +
+    '<span class="nm" title="' + esc(x.name) + '">' + esc(x.name) + '</span>' +
+    '<span class="pc">' + pct(100 * x.value / total) + '</span>' +
+    '<span class="sm">' + money(x.value) + '</span>' +
+    '</div>').join('');
+  $('#chart').innerHTML =
+    '<div class="chart">' + donut(items) +
+    '<div class="legend">' +
+    '<div class="row head"><span></span><span class="nm">Доля рынка по сумме</span>' +
+    '<span class="pc"></span><span class="sm"></span></div>' +
+    legend + '</div></div>';
+}
+
+const COLS = [
+  {key: 'name', title: 'Производитель', num: false},
+  {key: 'contracts', title: 'Контрактов', num: true},
+  {key: 'positions', title: 'Позиций', num: true},
+  {key: 'units', title: 'Единиц', num: true},
+  {key: 'sum', title: 'Сумма, ₽', num: true},
+  {key: 'share', title: 'Доля рынка', num: true},
+  {key: 'price', title: 'Цена за ед., ₽', num: true},
+];
+
+function sorted(list){
+  const out = list.slice().sort((a, b) => {
+    if(a.unknown !== b.unknown) return a.unknown ? 1 : -1;   // «не определён» всегда внизу
+    const x = a[SORT.key], y = b[SORT.key];
+    if(SORT.key === 'name') return SORT.dir * String(x).localeCompare(String(y), 'ru');
+    return SORT.dir * ((x || 0) - (y || 0));
+  });
+  return out;
+}
+
 function renderProducers(){
   if(!LAST) return;
   const all = LAST.producers || [];
-  const list = TOP ? all.slice(0, TOP) : all;
+  renderChart(all);
+  const list = (TOP ? sorted(all).slice(0, TOP) : sorted(all));
   $('#manCount').textContent = 'показано ' + list.length + ' из ' + all.length + ' ' +
     plural(all.length, 'производителя', 'производителей', 'производителей');
   $('#mergeBar').classList.toggle('hidden', all.length < 2);
   if(!list.length){ $('#tabMan').innerHTML = '<div class="hint">пусто</div>'; return; }
 
+  const head = '<th></th>' + COLS.map(c =>
+    '<th class="sortable' + (c.num ? ' num' : '') + '" data-sort="' + c.key + '">' +
+    esc(c.title) + (SORT.key === c.key
+      ? '<span class="ar">' + (SORT.dir < 0 ? '▼' : '▲') + '</span>' : '') +
+    '</th>').join('');
+
   const rows = list.map(m => {
     const name = m.unknown ? '<span class="guess">' + esc(m.name) + '</span>' : esc(m.name);
-    const spells = (m.spellings || []);
+    const spells = m.spellings || [];
     const merged = spells.length > 1
       ? '<span class="spell">' + (m.manual ? '<b>объединено вами:</b> ' : '<b>сведено само:</b> ') +
         spells.map(x => esc(x.name) + ' (' + num(x.positions) + ')').join(' · ') + '</span>'
@@ -984,22 +1112,24 @@ function renderProducers(){
       '<td>' + name + merged +
         (m.declarant ? '<div class="what">держатель РУ: ' + esc(m.declarant) + '</div>' : '') +
       '</td>' +
-      '<td class="num">' + num(m.positions) + '</td>' +
       '<td class="num">' + num(m.contracts) + '</td>' +
+      '<td class="num">' + num(m.positions) + '</td>' +
       '<td class="num">' + num(m.units) + '</td>' +
       '<td class="num">' + money(m.sum) + '</td>' +
-      '<td class="num">' + m.share + '%</td>' +
-      '<td>' + (m.ru && m.ru.length ? esc(m.ru.join(', ')) : '—') + '</td>' +
+      '<td class="num">' + pct(m.share) + '</td>' +
+      '<td class="num">' + (m.price ? money(m.price) : '—') + '</td>' +
       '</tr>';
   }).join('');
 
   $('#tabMan').innerHTML =
-    '<table class="tbl"><thead><tr>' +
-    '<th></th><th>Производитель</th><th class="num">Позиций</th>' +
-    '<th class="num">Контрактов</th>' +
-    '<th class="num">Единиц</th><th class="num">Сумма, ₽</th><th class="num">Доля</th>' +
-    '<th>№ РУ</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    '<table class="tbl"><thead><tr>' + head + '</tr></thead><tbody>' + rows +
+    '</tbody></table>';
 
+  $$('#tabMan th[data-sort]').forEach(th => th.onclick = () => {
+    const key = th.dataset.sort;
+    SORT = {key, dir: SORT.key === key ? -SORT.dir : (key === 'name' ? 1 : -1)};
+    renderProducers();
+  });
   $$('#tabMan input[type=checkbox]').forEach(c => c.onchange = updateMergeBar);
   updateMergeBar();
 }
