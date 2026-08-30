@@ -8,8 +8,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
+from . import timing
 from .config import settings, DEFAULT_STAGES
-from .eis.client import EisClient
+from .eis.client import TOTALS as EIS_TOTALS, EisClient
 from .eis.documents import (fetch_contract_xml, fetch_print_form,
                             is_amended)
 from .eis.html_parser import parse_print_form
@@ -46,6 +47,7 @@ class SearchParams:
 
 
 async def run_online(params: SearchParams, progress: Progress = _noop) -> RunResult:
+    fetched_at_start = dict(EIS_TOTALS)
     result = RunResult()
     wanted = {k for k in params.ktru if k}
     if not wanted:
@@ -120,6 +122,14 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
         "по КТРУ": totals,
         "секунд": round(time.time() - t0, 1),
     })
+
+    # запоминаем темп: сколько секунд ушло на контракт. Прогон, целиком
+    # взятый из кэша, для оценки не годится — он всегда быстрый.
+    downloaded = EIS_TOTALS["misses"] - fetched_at_start["misses"]
+    from_cache = EIS_TOTALS["hits"] - fetched_at_start["hits"]
+    asked = downloaded + from_cache
+    timing.record(len(parsed), time.time() - t0,
+                  downloaded / asked if asked else 1.0)
     return result
 
 

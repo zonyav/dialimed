@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 
 _RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
+# сколько ответов за время работы программы взято из кэша, а сколько скачано:
+# по этому соотношению видно, был ли прогон холодным
+TOTALS = {"hits": 0, "misses": 0}
+
 _ZLIB_MAGIC = b"\x78\x9c"
 
 
@@ -165,6 +169,7 @@ class EisClient:
             hit = await self.cache.get(url)
             if hit is not None:
                 self.stats["hits"] += 1
+                TOTALS["hits"] += 1
                 if self.on_request:
                     self.on_request(url, True)
                 return hit
@@ -173,6 +178,7 @@ class EisClient:
             body, filename = await self._fetch_raw(url)
 
         self.stats["misses"] += 1
+        TOTALS["misses"] += 1
         self.stats["bytes"] += len(body)
         if self.cache and cacheable:
             await self.cache.put(url, body, filename)

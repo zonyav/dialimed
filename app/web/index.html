@@ -663,6 +663,9 @@ $('#checkKtru').onclick = async () => {
       body: JSON.stringify({ktru: p.ktru, date_from: p.date_from,
                             date_to: p.date_to, stages: p.stages}),
     });
+    CODE_CONTRACTS = {};
+    for(const c of (res.codes || [])) CODE_CONTRACTS[c.code] = c.contracts || 0;
+    SEC_PER_CONTRACT = res.sec_per_contract || 3;
     box.innerHTML = renderCheck(res);
     const hasCodes = (res.codes || []).length > 0;
     $('#pickBar').classList.toggle('hidden', !hasCodes);
@@ -721,12 +724,42 @@ function renderCheck(res){
 
 const pickedCodes = () => $$('#ktruCheck input[type=checkbox]:checked').map(i => i.value);
 
-function updatePickHint(){
-  const n = pickedCodes().length;
-  $('#pickHint').textContent = n
-    ? 'отмечено ' + n + ' ' + plural(n, 'код', 'кода', 'кодов')
-    : 'ничего не отмечено';
+let CODE_CONTRACTS = {}, SEC_PER_CONTRACT = 3;
+
+/* «около 4 минут» — как сказал бы человек */
+function howLong(sec){
+  if(sec < 45) return 'меньше минуты';
+  const m = Math.round(sec / 60);
+  if(m <= 1) return 'около минуты';
+  if(m < 60) return 'около ' + m + ' ' + plural(m, 'минуты', 'минут', 'минут');
+  const h = Math.floor(m / 60), rest = m % 60;
+  const head = h === 1 ? 'около часа'
+                       : 'около ' + h + ' ' + plural(h, 'часа', 'часов', 'часов');
+  return rest < 10 ? head : head + ' ' + rest + ' мин';
 }
+
+function updatePickHint(){
+  const codes = pickedCodes();
+  const n = codes.length;
+  if(!n){ $('#pickHint').textContent = 'ничего не отмечено'; return; }
+  const cap = Number($('#limit').value || 0);
+  let contracts = 0;
+  for(const c of codes){
+    const have = CODE_CONTRACTS[c] || 0;
+    contracts += cap ? Math.min(have, cap) : have;
+  }
+  let text = 'отмечено ' + n + ' ' + plural(n, 'код', 'кода', 'кодов');
+  if(contracts){
+    text += ' · ' + num(contracts) + ' ' +
+            plural(contracts, 'контракт', 'контракта', 'контрактов') +
+            ' · ' + howLong(contracts * SEC_PER_CONTRACT);
+  }
+  $('#pickHint').textContent = text;
+}
+
+$('#limit').addEventListener('input', () => {
+  if(!$('#pickBar').classList.contains('hidden')) updatePickHint();
+});
 
 $('#usePicked').onclick = () => {
   const codes = pickedCodes();
@@ -756,14 +789,17 @@ function renderSteps(active){
   }).join('');
 }
 
-let timer = null, startedAt = 0;
+let timer = null, startedAt = 0, etaSec = 0;
 
 function startClock(){
   startedAt = Date.now();
+  etaSec = 0;
   clearInterval(timer);
   timer = setInterval(() => {
     const s = Math.round((Date.now() - startedAt) / 1000);
-    $('#elapsed').textContent = 'идёт ' + Math.floor(s / 60) + ' мин ' + (s % 60) + ' с';
+    let text = 'идёт ' + Math.floor(s / 60) + ' мин ' + (s % 60) + ' с';
+    if(etaSec > 0) text += ' · осталось ' + howLong(etaSec);
+    $('#elapsed').textContent = text;
   }, 1000);
 }
 
@@ -818,6 +854,7 @@ function attach(job){
 }
 
 function onProgress(p){
+  if(typeof p.eta === 'number') etaSec = p.eta;
   const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
   $('#stageText').textContent = p.text || p.stage;
   $('#stagePct').textContent = pct + '%';
