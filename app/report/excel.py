@@ -26,13 +26,13 @@ MISSING_FILL = PatternFill("solid", fgColor="F8CFCB")
 HAIR = Side(style="hair", color="C9CEDA")
 BORDER = Border(bottom=HAIR, left=HAIR, right=HAIR)
 
-MONEY = '# ##0.00" ₽"'
-INT = "# ##0"
+MONEY = '#,##0.00" ₽"'
+INT = "#,##0"
 PERCENT = '0.0" %"'
 DATE = "DD.MM.YYYY"
 
 PRICE_COLUMN = "Цена за ед., ₽"
-MISSING_COLUMNS = ("Производитель", "№ РУ")
+MISSING_COLUMNS = ("№ РУ", "Производитель", "Держатель РУ в РФ")
 LINK_COLUMN = "Ссылка на ЕИС"
 LINK_TEXT = "открыть в ЕИС"
 

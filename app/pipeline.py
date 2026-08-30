@@ -10,20 +10,19 @@ from typing import Callable, Iterable, Optional
 
 from .config import settings, DEFAULT_STAGES
 from .eis.client import EisClient
-from .eis.docx_spec import match_row, parse_spec
 from .eis.documents import (fetch_contract_xml, fetch_print_form,
-                            fetch_spec_documents, is_amended)
+                            is_amended)
 from .eis.html_parser import parse_print_form
 from .eis.nmck import fetch_nmck_many
 from .eis.search import search_ktru
-from .eis.xml_parser import clean_trademark, parse_contract_xml
+from .eis.xml_parser import parse_contract_xml
 from .enrich.textutil import articles, is_type_word
 from .enrich.nameparse import (COUNTRY_RE, DESCRIPTIVE_RE, ERUL_RE,
                                extract_ru_numbers, extract_tu,
                                is_opf_only, is_plain_word, looks_like_mark,
                                parse_name, pick_main_ru, quoted_marks,
                                variants_in_registry_name)
-from .enrich.verify import (COUNTRY_TAIL_RE, OPF_TAIL, clean_company, company_key,
+from .enrich.verify import (OPF_TAIL, clean_company, company_key,
                             company_keys, is_company_name, is_initialism)
 from .enrich.rzn import RznEnricher
 from .models import ContractMeta, Position, Problem, Row, RunResult
@@ -44,7 +43,6 @@ class SearchParams:
     date_to: str = ""
     stages: list[str] = field(default_factory=lambda: list(DEFAULT_STAGES))
     limit_per_ktru: int = 0
-    use_specs: bool = True
 
 
 async def run_online(params: SearchParams, progress: Progress = _noop) -> RunResult:
@@ -244,80 +242,6 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
     return rows
 
 
-async def _fill_from_specs(rows: list[Row], result: RunResult, progress: Progress) -> None:
-
-    todo = [r for r in rows if not r.pos.ru_name and r.meta.reestr_number]
-    if not todo:
-        return
-    by_contract: dict[str, list[Row]] = {}
-    for r in todo:
-        by_contract.setdefault(r.meta.reestr_number, []).append(r)
-
-    progress("спецификации", "разбор приложений к контрактам", 0, len(by_contract))
-    filled = 0
-    async with EisClient() as client:
-        sem = asyncio.Semaphore(settings.eis_concurrency)
-        done = 0
-        lock = asyncio.Lock()
-
-        async def one(rn: str, group: list[Row]) -> int:
-            nonlocal done
-            got = 0
-            async with sem:
-                docs = await fetch_spec_documents(client, rn)
-            for _name, body in docs:
-                try:
-                    spec = parse_spec(body)
-                except Exception as e:
-                    log.debug("спецификация %s: %s", rn, e)
-                    continue
-                if not spec:
-                    continue
-                for r in group:
-                    if r.pos.ru_name:
-                        continue
-                    row = match_row(spec, ktru=r.pos.ktru, name=r.pos.name)
-                    if row is None:
-                        continue
-                    if row.ru_name:
-                        r.pos.ru_name = row.ru_name
-                        got += 1
-                    if row.ru_number and not r.pos.ru_number:
-                        r.pos.ru_number = row.ru_number
-                    if row.trademark and not r.pos.trademark:
-                        r.pos.trademark = clean_trademark(row.trademark)
-                    spec_manuf = company_from_spec(row.manufacturer)
-                    if spec_manuf and not r.pos.manufacturer:
-                        r.pos.manufacturer = spec_manuf
-                        r.pos.manufacturer_source = "спецификация контракта"
-                        r.pos.confidence = "medium"
-                    if row.country and not r.pos.country:
-                        r.pos.country = row.country
-                if got:
-                    break
-            async with lock:
-                done += 1
-                progress("спецификации", f"{done} из {len(by_contract)}",
-                         done, len(by_contract))
-            return got
-
-        pairs = list(by_contract.items())
-        results = await asyncio.gather(
-            *(one(rn, grp) for rn, grp in pairs), return_exceptions=True)
-        for (rn, _grp), got in zip(pairs, results):
-            if isinstance(got, BaseException):
-                result.problems.append(Problem(
-                    rn, "спецификация", f"{type(got).__name__}: {got}"))
-                log.warning("спецификация %s: %s", rn, got)
-            else:
-                filled += got
-
-    result.stats["спецификации"] = {
-        "контрактов проверено": len(by_contract),
-        "позиций дозаполнено": filled,
-    }
-
-
 def _type_hints(pos: Position) -> list[str]:
 
     return [h for h in (pos.ktru_name, pos.nkmi_name) if h]
@@ -364,8 +288,6 @@ async def _enrich(rows: list[Row], params: SearchParams, result: RunResult,
     if not rows:
         return
 
-    if params.use_specs:
-        await _fill_from_specs(rows, result, progress)
     _parse_names(rows)
 
     async with RznEnricher() as rzn:
@@ -404,6 +326,27 @@ async def _enrich(rows: list[Row], params: SearchParams, result: RunResult,
         if not r.pos.manufacturer:
             r.pos.manufacturer_source = ""
             r.pos.confidence = r.pos.confidence or "low"
+    _drop_without_ru(rows, result)
+
+
+def _drop_without_ru(rows: list[Row], result: RunResult) -> None:
+    """Без номера РУ производитель и держатель ничем не подтверждены —
+    в отчёт они не идут, чтобы догадка не выглядела как факт."""
+
+    dropped = 0
+    for r in rows:
+        p = r.pos
+        if p.ru_number:
+            continue
+        if p.manufacturer or p.declarant or p.declarant_inn:
+            dropped += 1
+        p.manufacturer = ""
+        p.declarant = ""
+        p.declarant_inn = ""
+        p.manufacturer_source = ""
+        p.confidence = "low"
+    if dropped:
+        result.stats["снято без подтверждения по РУ"] = dropped
 
 
 def _extends(short: str, long: str) -> bool:
@@ -497,18 +440,6 @@ async def _fill_nmck(client: EisClient, metas: list[ContractMeta],
         "совместных закупок": sum(1 for m in todo if m.nmck_note),
         "цена изменена доп. соглашением": sum(1 for m in metas if m.amended),
     }
-
-
-def company_from_spec(s: str) -> str:
-
-    s = " ".join((s or "").split())
-    m = re.search(r"(?:Произв\w*|Изготовител\w*)\s*[.:]+\s*(.+)$", s, re.I)
-    if m:
-        s = m.group(1).lstrip(" :.,")
-    s = COUNTRY_TAIL_RE.sub("", s).strip(" ,;")
-    if not is_company_name(s):
-        return ""
-    return clean_company(s)
 
 
 def _company_head_words(name: str) -> set[str]:

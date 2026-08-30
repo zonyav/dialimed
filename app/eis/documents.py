@@ -139,38 +139,3 @@ async def fetch_print_form(client: EisClient, reestr_number: str) -> tuple[Optio
 
 def print_form_url(reestr_number: str) -> str:
     return f"{PRINT_FORM}?contractReestrNumber={reestr_number}"
-
-
-_SPEC_SKIP = re.compile(r"платёжн|платежн|поручени|о\s*приемк|о\s*приёмк|подпис|"
-                        r"извещени|протокол|\bсч[её]т", re.I)
-
-
-async def fetch_spec_documents(client: EisClient, reestr_number: str,
-                               limit: int = 2) -> list[tuple[str, bytes]]:
-
-    url = f"{DOC_TAB}?reestrNumber={reestr_number}"
-    try:
-        html = await client.fetch_text(url)
-    except Exception as e:
-        log.debug("вкладка документов %s: %s", reestr_number, e)
-        return []
-
-    seen: set[str] = set()
-    picked: list[Attachment] = []
-    for a in parse_attachments(html):
-        fn = a.filename.lower()
-        if not fn.endswith(".docx") or _SPEC_SKIP.search(a.filename):
-            continue
-        if fn in seen:
-            continue
-        seen.add(fn)
-        picked.append(a)
-
-    out: list[tuple[str, bytes]] = []
-    for a in picked[:limit]:
-        try:
-            body, _ = await client.fetch(a.url)
-            out.append((a.filename, body))
-        except Exception as e:
-            log.debug("вложение %s: %s", a.filename[:40], e)
-    return out

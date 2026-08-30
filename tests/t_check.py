@@ -94,8 +94,7 @@ from app.enrich.rzn import distinctive_tokens, similarity, strong_tokens
 from app.enrich.verify import clean_company, company_key, is_company_name
 from app.models import ContractMeta, Position, Row, RunResult
 from app.pipeline import (_cut_company_tail, _extend_bare_marks,
-                          _parse_names,
-                          company_from_spec)
+                          _parse_names)
 
 print("\n имена вложений")
 check("размер отрезан", clean_filename("Электронный контракт.xml (67.08 Кб)"),
@@ -541,13 +540,6 @@ _KEEP = [Row(ContractMeta(), Position(mark=mk)) for mk in ("АРМЕД-230", "А
 _canon_mark_case(_KEEP)
 check("буквы и цифры не трогаются", [r.pos.mark for r in _KEEP],
       ["АРМЕД-230", "АРМЕД"])
-
-print("\n фирма из спецификации чистится так же, как из реестра")
-check("страна из двух слов и в спецификации",
-      company_from_spec('Произв.: ООО «Медстальконструкция», Российская Федерация'),
-      'ООО «Медстальконструкция»')
-check("страна вместо фирмы отбрасывается",
-      company_from_spec("Китайская Народная Республика"), "")
 
 print("\n название завода не должно оставаться в обозначении")
 FOSHAN = ('Foshan Safety Medical Equipment Co., Ltd. '

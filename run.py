@@ -121,8 +121,6 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0,
                     help="максимум контрактов на один код КТРУ (0 — без ограничения)")
     ap.add_argument("--out", "-o", help="путь к файлу отчёта .xlsx")
-    ap.add_argument("--no-specs", action="store_true",
-                    help="не разбирать приложенные к контрактам спецификации (.docx)")
     ap.add_argument("--no-cache", action="store_true", help="игнорировать дисковый кэш")
     ap.add_argument("--compact-cache", action="store_true",
                     help="сжать кэш и вернуть место на диске, затем выйти")
@@ -216,7 +214,6 @@ def main() -> int:
         date_to=args.date_to,
         stages=[s.strip() for s in args.stages.split(",") if s.strip()],
         limit_per_ktru=max(0, args.limit),
-        use_specs=not args.no_specs,
     )
 
     print("\n  Коды КТРУ:", ", ".join(codes))
