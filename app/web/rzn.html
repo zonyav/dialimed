@@ -141,6 +141,12 @@ const rusDate = s => /^\d{4}-\d{2}-\d{2}/.test(s || '')
             (d.variants || []).join('; ') || d.models) +
         '</dl></div>' : '');
 })();
+
+  /* пока открыта эта страница, программа не должна закрываться */
+  const alive = () => fetch('/api/alive', {method: 'POST'}).catch(() => {});
+  alive();
+  setInterval(alive, 10000);
+  window.addEventListener('pagehide', () => navigator.sendBeacon('/api/bye'));
 </script>
 </body>
 </html>

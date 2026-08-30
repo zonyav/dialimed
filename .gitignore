@@ -8,3 +8,6 @@ dist/
 *.spec.bak
 release/
 app/_build.py
+
+# карта проекта для Claude Code — только для разработки
+CLAUDE.md

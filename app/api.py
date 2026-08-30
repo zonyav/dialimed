@@ -13,8 +13,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from urllib.parse import urlsplit
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               StreamingResponse)
 from pydantic import BaseModel, Field
 
 from .config import DATA, settings, STAGES, DEFAULT_STAGES
@@ -93,12 +96,18 @@ JOBS: dict[str, Job] = {}
 RUN_LOCK = asyncio.Lock()
 CURRENT: Optional[str] = None
 
-# страница раз в 10 секунд стучится в /api/alive; если стучать перестали,
-# значит её закрыли — и программе больше незачем висеть в памяти
-ALIVE_TIMEOUT = 45.0
-ALIVE_CHECK = 15.0
+# Программа живёт, пока открыта её страница. Отсчитывать молчание нельзя:
+# браузер замораживает таймеры в фоновой вкладке, и программа умирала, пока
+# человек смотрел уже выгруженный отчёт. Поэтому выходим по явному сигналу
+# «вкладку закрыли» (/api/bye), выждав CLOSE_GRACE — перезагрузка страницы
+# шлёт такой же сигнал, но сразу возвращается и отменяет выход.
+CLOSE_GRACE = 25.0
+ALIVE_CHECK = 5.0
+IDLE_LIMIT = settings.idle_hours * 3600.0
 _last_ping: float = 0.0
+_closing_at: Optional[float] = None
 _watchdog: Optional[asyncio.Task] = None
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _busy_job() -> Optional[Job]:
@@ -122,6 +131,16 @@ class RunRequest(BaseModel):
     limit_per_ktru: int = 0
 
 
+@app.middleware("http")
+async def _local_only(request: Request, call_next):
+
+    origin = request.headers.get("origin")
+    if origin and (urlsplit(origin).hostname or "") not in LOCAL_HOSTS:
+        return JSONResponse({"detail": "Запрос пришёл с чужой страницы."},
+                            status_code=403)
+    return await call_next(request)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
     return (WEB / "index.html").read_text(encoding="utf-8")
@@ -130,12 +149,40 @@ async def index() -> str:
 @app.post("/api/alive")
 async def alive() -> dict:
 
-    global _last_ping, _watchdog
+    global _last_ping, _closing_at, _watchdog
 
     _last_ping = time.monotonic()
+    _closing_at = None
     if _watchdog is None or _watchdog.done():
         _watchdog = asyncio.create_task(_watch_page())
     return {"ok": True}
+
+
+@app.post("/api/bye")
+async def bye() -> dict:
+
+    global _closing_at
+
+    _closing_at = time.monotonic()
+    return {"ok": True}
+
+
+@app.post("/api/quit")
+async def quit_now() -> dict:
+
+    log.info("выход по кнопке в интерфейсе")
+    asyncio.create_task(_shutdown(0.4))
+    return {"ok": True}
+
+
+async def _shutdown(delay: float) -> None:
+
+    await asyncio.sleep(delay)
+    for job in list(JOBS.values()):
+        if job.task is not None and not job.task.done():
+            job.task.cancel()
+    await asyncio.sleep(0.2)
+    os._exit(0)
 
 
 async def _watch_page() -> None:
@@ -144,14 +191,14 @@ async def _watch_page() -> None:
         await asyncio.sleep(ALIVE_CHECK)
         if _busy_job() is not None or RUN_LOCK.locked():
             continue
-        if time.monotonic() - _last_ping < ALIVE_TIMEOUT:
-            continue
-        log.info("страница закрыта — завершаю работу")
-        for job in list(JOBS.values()):
-            if job.task is not None and not job.task.done():
-                job.task.cancel()
-        await asyncio.sleep(0.2)
-        os._exit(0)
+        now = time.monotonic()
+        if _closing_at is not None and now - _closing_at >= CLOSE_GRACE:
+            log.info("страницу закрыли — завершаю работу")
+            await _shutdown(0.0)
+        elif now - _last_ping >= IDLE_LIMIT:
+            log.info("страница не отвечает %.0f ч — завершаю работу",
+                     IDLE_LIMIT / 3600)
+            await _shutdown(0.0)
 
 
 @app.get("/api/status")

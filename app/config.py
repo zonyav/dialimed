@@ -82,6 +82,8 @@ class Settings:
     kind_slice_enabled: bool = _bool("MI_KIND_SLICE", True)
     kind_slice_max: int = _int("MI_KIND_SLICE_MAX", 1200)
 
+    idle_hours: float = _flt("MI_IDLE_HOURS", 6.0)
+
     cache_enabled: bool = _bool("MI_CACHE_ENABLED", True)
     cache_ttl_days: int = _int("MI_CACHE_TTL_DAYS", 30)
     cache_max_mb: int = _int("MI_CACHE_MAX_MB", 400)
