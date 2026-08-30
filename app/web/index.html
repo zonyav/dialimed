@@ -133,9 +133,9 @@ nav a .c.warn{color:var(--warn)}
   border:1px solid var(--line);
   border-radius:10px;padding:12px 16px;font:inherit;
 }
-.find input::placeholder{color:var(--faint)}
-.find input:focus{outline:2px solid var(--lime);outline-offset:-2px;
-  border-color:var(--lime)}
+.find input::placeholder,.mergebar input::placeholder{color:var(--faint)}
+.find input:focus,.mergebar input:focus{outline:2px solid var(--lime);
+  outline-offset:-2px;border-color:var(--lime)}
 .chip{
   border:1px solid var(--line);
   background:transparent;color:var(--dim);
@@ -324,7 +324,7 @@ input:focus,textarea:focus{outline:2px solid var(--lime);outline-offset:-2px;
 .chart{display:flex;gap:30px;align-items:center;flex-wrap:wrap;
   margin:4px 0 20px;color:var(--ink)}
 .legend{flex:1;min-width:280px;display:grid;gap:8px}
-.legend .line{display:grid;grid-template-columns:12px 1fr 62px;gap:12px;
+.legend .line{display:grid;grid-template-columns:12px 1fr 62px 130px;gap:12px;
   align-items:center;font-size:13.5px;padding:2px 0}
 .legend .cap{color:var(--faint);font-size:11px;text-transform:uppercase;
   letter-spacing:.09em;margin-bottom:2px}
@@ -337,8 +337,32 @@ input:focus,textarea:focus{outline:2px solid var(--lime);outline-offset:-2px;
 .tbl th .ar{opacity:.6;font-size:9px;margin-left:4px}
 .tbl td.pick{width:34px;padding-right:0}
 .tbl input[type=checkbox]{width:15px;height:15px;accent-color:var(--lime);cursor:pointer}
-.spell{display:block;margin-top:5px;color:var(--faint);font-size:12px;line-height:1.5}
-.spell b{font-weight:600;color:var(--dim)}
+.mergebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:2px 0 0;padding:12px 14px;border:1px solid var(--line);
+  border-radius:12px;background:var(--surface)}
+.mergebar input{
+  flex:0 1 250px;min-width:170px;background:var(--bg);color:var(--ink);
+  border:1px solid var(--line);border-radius:10px;padding:9px 13px;
+  font:400 14px/1.2 var(--f-text);
+}
+.mergebar .hint{margin:0;flex:1;min-width:190px;text-align:right}
+
+.spell{display:block;margin-top:6px;color:var(--faint);font-size:11.5px;
+  line-height:1.5}
+.spell b{font-weight:600;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.07em;font-size:10px}
+.spell .pill{display:inline-block;max-width:250px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;
+  background:var(--raised);border:1px solid var(--line);border-radius:8px;
+  padding:2px 8px;margin:4px 5px 0 0;font-size:11.5px;color:var(--dim)}
+.spell .pill i{font-style:normal;color:var(--faint)}
+.spell .pill.more{background:transparent;border-style:dashed;color:var(--faint)}
+.tbl .what{color:var(--faint);font-size:12px;margin-top:6px}
+.tbl.makers{table-layout:fixed;min-width:900px}
+/* список короче окна: переключение «Топ 5 / Топ 10 / Все» должно быть
+   видно целиком, а не уезжать под нижний край экрана */
+.scrollbox.makers{max-height:min(62vh,760px)}
+.tbl.makers td:not(.pick){overflow-wrap:anywhere}
 tr.grouped > td{background:rgba(203,242,81,.05)}
 .tbl .num{text-align:right}
 .tbl table th{position:static;background:transparent}
@@ -538,14 +562,16 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
 
     <div id="chart"></div>
 
-    <div class="stack hidden" id="mergeBar" style="margin:0 0 12px">
+    <div class="mergebar hidden" id="mergeBar">
+      <input id="manFind" type="search" autocomplete="off"
+             placeholder="поиск по названию" aria-label="поиск производителя">
       <button id="doMerge" class="quiet small" type="button">Объединить отмеченные</button>
       <button id="doRename" class="quiet small hidden" type="button">Переименовать</button>
       <button id="doSplit" class="quiet small hidden" type="button">Разъединить</button>
-      <span class="hint" id="mergeHint" style="margin:0;flex:1;min-width:220px"></span>
+      <span class="hint" id="mergeHint"></span>
     </div>
 
-    <div class="scrollbox"><div id="tabMan"></div></div>
+    <div class="scrollbox makers"><div id="tabMan"></div></div>
     <div class="hint" style="margin-top:10px">Один и тот же завод в контрактах
       пишут по-разному. Отметьте строки, которые относятся к одной фирме,
       и нажмите «Объединить» — программа запомнит это и будет сводить их
@@ -1074,7 +1100,7 @@ function donut(items){
          out +
          '<text x="' + c + '" y="' + (c - 4) + '" text-anchor="middle" ' +
          'fill="currentColor" font-size="17" font-weight="600">' +
-         esc(money(total)) + '</text>' +
+         num(Math.round(total)) + ' ₽</text>' +
          '<text x="' + c + '" y="' + (c + 16) + '" text-anchor="middle" ' +
          'fill="currentColor" opacity=".55" font-size="11">всего закуплено</text>' +
          '</svg>';
@@ -1089,6 +1115,7 @@ function renderChart(all){
     '<span class="dot" style="background:' + x.color + '"></span>' +
     '<span class="nm" title="' + esc(x.name) + '">' + esc(x.name) + '</span>' +
     '<span class="pc">' + pct(100 * x.value / total) + '</span>' +
+    '<span class="sm">' + num(Math.round(x.value)) + ' ₽</span>' +
     '</div>').join('');
   $('#chart').innerHTML =
     '<div class="chart">' + donut(items) +
@@ -1096,15 +1123,21 @@ function renderChart(all){
     '<div class="cap">Доля рынка по сумме</div>' + legend + '</div></div>';
 }
 
+/* ширины заданы жёстко, иначе колонки прыгают при каждой сортировке */
 const COLS = [
-  {key: 'name', title: 'Производитель', num: false},
-  {key: 'contracts', title: 'Контрактов', num: true},
-  {key: 'positions', title: 'Позиций', num: true},
-  {key: 'units', title: 'Единиц', num: true},
-  {key: 'sum', title: 'Сумма, ₽', num: true},
-  {key: 'share', title: 'Доля рынка', num: true},
-  {key: 'price', title: 'Цена за ед., ₽', num: true},
+  {key: '', title: '', num: false, width: '38px'},
+  {key: 'name', title: 'Производитель', num: false, width: 'auto'},
+  {key: 'contracts', title: 'Контрактов', num: true, width: '104px'},
+  {key: 'positions', title: 'Позиций', num: true, width: '92px'},
+  {key: 'units', title: 'Единиц', num: true, width: '92px'},
+  {key: 'sum', title: 'Сумма, ₽', num: true, width: '140px'},
+  {key: 'share', title: 'Доля рынка', num: true, width: '110px'},
+  {key: 'price', title: 'Цена за ед., ₽', num: true, width: '134px'},
 ];
+
+const SPELLS_SHOWN = 3;   // сколько написаний показываем в объединённой строке
+let PICKED = new Set();   // отмеченные строки — переживают сортировку и поиск
+let FILTER = '';
 
 function sorted(list){
   const out = list.slice().sort((a, b) => {
@@ -1116,35 +1149,78 @@ function sorted(list){
   return out;
 }
 
+/* какие строки показать: поиск, потом «Топ N» */
+function visible(all){
+  const q = FILTER.trim().toLowerCase();
+  const found = sorted(q ? all.filter(m => hay(m).includes(q)) : all);
+  if(!TOP || found.length <= TOP) return found;
+  const head = found.slice(0, TOP);
+  // объединённое вручную и отмеченное из «Топ N» не выкидываем: иначе строка
+  // пропадает сразу после объединения, стоит отсортировать по другой колонке
+  const kept = found.slice(TOP).filter(m => m.manual || PICKED.has(m.name));
+  return kept.length ? sorted(head.concat(kept)) : head;
+}
+
+function hay(m){
+  return [m.name].concat((m.spellings || []).map(x => x.name))
+                 .join(' ').toLowerCase();
+}
+
 function renderProducers(){
   if(!LAST) return;
   const all = LAST.producers || [];
   renderChart(all);
-  const list = (TOP ? sorted(all).slice(0, TOP) : sorted(all));
-  $('#manCount').textContent = 'показано ' + list.length + ' из ' + all.length + ' ' +
-    plural(all.length, 'производителя', 'производителей', 'производителей');
-  $('#mergeBar').classList.toggle('hidden', all.length < 2);
-  if(!list.length){ $('#tabMan').innerHTML = '<div class="hint">пусто</div>'; return; }
+  const list = visible(all);
+  const box = $('#tabMan').closest('.scrollbox');
+  const keepScroll = box ? box.scrollTop : 0;
 
-  const head = '<th></th>' + COLS.map(c =>
-    '<th class="sortable' + (c.num ? ' num' : '') + '" data-sort="' + c.key + '">' +
-    esc(c.title) + (SORT.key === c.key
-      ? '<span class="ar">' + (SORT.dir < 0 ? '▼' : '▲') + '</span>' : '') +
-    '</th>').join('');
+  const q = FILTER.trim();
+  $('#manCount').textContent = q
+    ? 'найдено ' + list.length + ' из ' + all.length
+    : 'показано ' + list.length + ' из ' + all.length + ' ' +
+      plural(all.length, 'производителя', 'производителей', 'производителей');
+  $('#mergeBar').classList.toggle('hidden', all.length < 2);
+  if(!list.length){
+    $('#tabMan').innerHTML = '<div class="hint">' +
+      (q ? 'по запросу «' + esc(q) + '» никого нет' : 'пусто') + '</div>';
+    updateMergeBar();
+    return;
+  }
+
+  const cols = COLS.map(c => '<col style="width:' + c.width + '">').join('');
+  const head = COLS.map(c => c.key
+    ? '<th class="sortable' + (c.num ? ' num' : '') + '" data-sort="' + c.key + '">' +
+      esc(c.title) + (SORT.key === c.key
+        ? '<span class="ar">' + (SORT.dir < 0 ? '▼' : '▲') + '</span>' : '') + '</th>'
+    : '<th></th>').join('');
 
   const rows = list.map(m => {
-    const name = m.unknown ? '<span class="guess">' + esc(m.name) + '</span>' : esc(m.name);
     const spells = m.spellings || [];
-    const merged = spells.length > 1
-      ? '<span class="spell">' + (m.manual ? '<b>объединено вами:</b> ' : '<b>сведено само:</b> ') +
-        spells.map(x => esc(x.name) + ' (' + num(x.positions) + ')').join(' · ') + '</span>'
+    const joined = spells.length > 1;
+    // показываем не больше трёх написаний: иначе объединённая строка
+    // вырастает на пол-экрана, полное название — в подсказке
+    const shown = spells.slice(0, SPELLS_SHOWN);
+    const pills = shown.map(x =>
+      '<span class="pill" title="' + esc(x.name) + '">' + esc(x.name) +
+      ' <i>' + num(x.positions) + '</i></span>').join('') +
+      (spells.length > shown.length
+        ? '<span class="pill more">и ещё ' + (spells.length - shown.length) + '</span>'
+        : '');
+    const merged = joined
+      ? '<span class="spell"><b>' + (m.manual ? 'объединено вами' : 'сведено само') +
+        '</b><br>' + pills + '</span>'
       : '';
-    return '<tr' + (spells.length > 1 ? ' class="grouped"' : '') + '>' +
+    // держатель и номера РУ у каждой позиции свои — объединение меняет
+    // только написание названия завода
+    const holder = m.declarants > 1
+      ? '<div class="what">держателей РУ: ' + num(m.declarants) + '</div>'
+      : (m.declarant ? '<div class="what">держатель РУ: ' + esc(m.declarant) + '</div>' : '');
+    return '<tr' + (joined ? ' class="grouped"' : '') + '>' +
       '<td class="pick">' + (m.unknown ? '' :
-        '<input type="checkbox" value="' + esc(m.name) + '" aria-label="отметить">') + '</td>' +
-      '<td>' + name + merged +
-        (m.declarant ? '<div class="what">держатель РУ: ' + esc(m.declarant) + '</div>' : '') +
-      '</td>' +
+        '<input type="checkbox" value="' + esc(m.name) + '" aria-label="отметить"' +
+        (PICKED.has(m.name) ? ' checked' : '') + '>') + '</td>' +
+      '<td>' + (m.unknown ? '<span class="guess">' + esc(m.name) + '</span>'
+                          : esc(m.name)) + merged + holder + '</td>' +
       '<td class="num">' + num(m.contracts) + '</td>' +
       '<td class="num">' + num(m.positions) + '</td>' +
       '<td class="num">' + num(m.units) + '</td>' +
@@ -1155,24 +1231,30 @@ function renderProducers(){
   }).join('');
 
   $('#tabMan').innerHTML =
-    '<table class="tbl"><thead><tr>' + head + '</tr></thead><tbody>' + rows +
-    '</tbody></table>';
+    '<table class="tbl makers"><colgroup>' + cols + '</colgroup><thead><tr>' +
+    head + '</tr></thead><tbody>' + rows + '</tbody></table>';
 
   $$('#tabMan th[data-sort]').forEach(th => th.onclick = () => {
     const key = th.dataset.sort;
     SORT = {key, dir: SORT.key === key ? -SORT.dir : (key === 'name' ? 1 : -1)};
     renderProducers();
   });
-  $$('#tabMan input[type=checkbox]').forEach(c => c.onchange = updateMergeBar);
+  $$('#tabMan input[type=checkbox]').forEach(c => c.onchange = () => {
+    if(c.checked) PICKED.add(c.value); else PICKED.delete(c.value);
+    updateMergeBar();
+  });
+  if(box) box.scrollTop = keepScroll;
   updateMergeBar();
 }
 
 /* ── объединение производителей ─────────────────────────────────── */
 
-const pickedMan = () => $$('#tabMan input[type=checkbox]:checked').map(i => i.value);
+/* отметки живут отдельно от таблицы: сортировка и поиск их не сбрасывают */
+const pickedMan = () =>
+  ((LAST && LAST.producers) || []).filter(m => PICKED.has(m.name)).map(m => m.name);
 
 function groupOf(name){
-  return (LAST.producers || []).find(m => m.name === name);
+  return ((LAST && LAST.producers) || []).find(m => m.name === name);
 }
 
 function updateMergeBar(){
@@ -1180,12 +1262,14 @@ function updateMergeBar(){
   const single = picked.length === 1 ? groupOf(picked[0]) : null;
   const joined = single && (single.spellings || []).length > 1;
   $('#doMerge').disabled = picked.length < 2;
+  $('#doMerge').textContent = picked.length > 1
+    ? 'Объединить отмеченные (' + picked.length + ')' : 'Объединить отмеченные';
   $('#doRename').classList.toggle('hidden', !single);
   $('#doSplit').classList.toggle('hidden', !joined);
   $('#mergeHint').textContent = picked.length < 2
     ? (single ? 'можно переименовать' + (joined ? ' или разъединить' : '')
               : 'отметьте две строки и больше, чтобы объединить')
-    : 'отмечено ' + picked.length + ' — объединятся в одну фирму';
+    : 'отмечено ' + picked.length + ' — станут одной фирмой';
 }
 
 async function applyGroups(url, body){
@@ -1195,7 +1279,9 @@ async function applyGroups(url, body){
       body: JSON.stringify(Object.assign({job: CURRENT_JOB}, body)),
     });
     LAST.producers = r.producers || [];
+    PICKED.clear();
     renderProducers();
+    if(r.save_error) toast(r.save_error, true);
     return true;
   }catch(e){ toast(e.message, true); return false; }
 }
@@ -1208,8 +1294,8 @@ $('#doMerge').onclick = async () => {
   const ok = await ask('Объединить производителей?',
     '<p>' + picked.map(esc).join('<br>') + '</p>' +
     '<p>Станут одной фирмой с названием <b>' + esc(best) + '</b> — его можно ' +
-    'изменить кнопкой «Переименовать». Программа запомнит объединение ' +
-    'и применит его в следующих прогонах.</p>', 'Объединить');
+    'изменить кнопкой «Переименовать». Номера РУ и держатели у позиций ' +
+    'останутся прежними: объединяется только написание названия.</p>', 'Объединить');
   if(!ok) return;
   if(await applyGroups('/api/groups/merge', {names: picked, title: best}))
     toast('Объединено: ' + best);
@@ -1243,6 +1329,8 @@ $('#doSplit').onclick = async () => {
     toast('Разъединено');
 };
 
+$('#manFind').oninput = () => { FILTER = $('#manFind').value || ''; renderProducers(); };
+
 $$('[data-top]').forEach(chip => {
   chip.onclick = () => {
     $$('[data-top]').forEach(c => { c.classList.remove('on'); c.setAttribute('aria-pressed', 'false'); });
@@ -1250,6 +1338,8 @@ $$('[data-top]').forEach(chip => {
     chip.setAttribute('aria-pressed', 'true');
     TOP = Number(chip.dataset.top);
     renderProducers();
+    const box = $('#tabMan').closest('.scrollbox');
+    if(box) box.scrollTop = 0;      // список сменился — показываем его сверху
   };
 });
 

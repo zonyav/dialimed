@@ -556,6 +556,8 @@ def _producers(res: RunResult) -> list[dict]:
         got = sum(x.pos.total or 0 for x in rs)
         spellings = sorted(members.get(name, []),
                            key=lambda n: (-len(by_name[n]), n.lower()))
+        holders = sorted({x.pos.declarant for x in rs if x.pos.declarant})
+        ru_numbers = sorted({x.pos.ru_number for x in rs if x.pos.ru_number})
         out.append({
             "name": name or "производитель не определён",
             "unknown": not name,
@@ -567,8 +569,12 @@ def _producers(res: RunResult) -> list[dict]:
             "price": statistics.median(prices) if prices else None,
             "price_min": prices[0] if prices else None,
             "price_max": prices[-1] if prices else None,
-            "declarant": next((x.pos.declarant for x in rs if x.pos.declarant), ""),
-            "ru": sorted({x.pos.ru_number for x in rs if x.pos.ru_number})[:5],
+            # держателя показываем, только когда он у группы один: объединяют
+            # написания названия завода, а РУ и держатель у каждой позиции свои
+            "declarant": holders[0] if len(holders) == 1 else "",
+            "declarants": len(holders),
+            "ru": ru_numbers[:5],
+            "ru_count": len(ru_numbers),
             "spellings": [{"name": n, "positions": len(by_name[n])}
                           for n in spellings],
             "manual": name in by_manual,
@@ -583,11 +589,26 @@ class GroupRequest(BaseModel):
     title: str = ""
 
 
-def _job_result(job_id: str) -> RunResult:
+def _job_of(job_id: str) -> Job:
     job = JOBS.get(job_id) or JOBS.get(CURRENT or "")
     if job is None or job.result is None:
         raise HTTPException(404, "Прогон не найден — сначала выполните поиск.")
-    return job.result
+    return job
+
+
+async def _regrouped(job_id: str) -> dict:
+    """Ответ после правки объединений: список фирм и заново записанный отчёт.
+
+    Имя группы попадает в колонку «Производитель», поэтому файл надо
+    переписать — иначе в xlsx останутся старые написания.
+    """
+
+    job = _job_of(job_id)
+    out = {"producers": _producers(job.result)}
+    error = await job.save()
+    if error:
+        out["save_error"] = error
+    return out
 
 
 @app.post("/api/groups/merge")
@@ -596,14 +617,14 @@ async def groups_merge(req: GroupRequest) -> dict:
     if len(req.names) < 2 and not req.title:
         raise HTTPException(400, "Отметьте хотя бы два написания.")
     title = groups.merge(req.names, req.title)
-    return {"title": title, "producers": _producers(_job_result(req.job))}
+    return {"title": title, **await _regrouped(req.job)}
 
 
 @app.post("/api/groups/split")
 async def groups_split(req: GroupRequest) -> dict:
 
     groups.split(req.names)
-    return {"producers": _producers(_job_result(req.job))}
+    return await _regrouped(req.job)
 
 
 @app.post("/api/groups/rename")
@@ -615,7 +636,7 @@ async def groups_rename(req: GroupRequest) -> dict:
         groups.rename(req.names[0], req.title)
         if not groups.load().get(req.title):
             groups.merge(req.names, req.title)
-    return {"producers": _producers(_job_result(req.job))}
+    return await _regrouped(req.job)
 
 
 def _remarks(res: RunResult) -> list[str]:
@@ -648,6 +669,18 @@ def _remarks(res: RunResult) -> list[str]:
     return out
 
 
+def _summary_now(job: Job) -> dict:
+    """Событие «готово» со свежими объединениями производителей.
+
+    Список фирм в нём посчитан на момент конца прогона, а объединения
+    правятся уже после — при перезагрузке страницы они бы пропали.
+    """
+
+    if not job.summary or job.result is None:
+        return job.summary
+    return {**job.summary, "producers": _producers(job.result)}
+
+
 @app.get("/api/job/{job_id}")
 async def job_state(job_id: str) -> dict:
 
@@ -662,7 +695,7 @@ async def job_state(job_id: str) -> dict:
         "finished": job.finished,
         "error": job.error,
         "progress": job.last,
-        "summary": job.summary,
+        "summary": _summary_now(job),
         "file": job.file.name if job.file else "",
         "started": job.started.isoformat(timespec="seconds"),
         "stopped": job.stopped,
