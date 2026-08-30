@@ -20,7 +20,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                StreamingResponse)
 from pydantic import BaseModel, Field
 
-from . import timing
+from . import groups, timing
 from .config import DATA, settings, STAGES, DEFAULT_STAGES
 from .eis.client import EisClient
 from .eis.search import parse_ktru_list
@@ -526,16 +526,67 @@ def _summary(res: RunResult) -> dict:
     }
 
 
+def _group_titles(names: list[str]) -> tuple[dict[str, str], set[str]]:
+    """Разложить написания по группам: сначала ручные, потом очевидные дубли.
+
+    Очевидные — это те, что отличаются только организационной формой,
+    кавычками или регистром: «ООО "ДИКСИОН"» и «Диксион, ООО». Всё
+    остальное («Диксион» и «Dixion») человек объединяет сам.
+    """
+
+    manual = groups.index()
+    title_of: dict[str, str] = {}
+    by_manual: set[str] = set()
+    auto: dict[str, list[str]] = defaultdict(list)
+
+    for name in names:
+        if not name:
+            continue
+        title = manual.get(groups.key(name))
+        if title:
+            title_of[name] = title
+            by_manual.add(title)
+        else:
+            auto[groups.key(name)].append(name)
+
+    for same in auto.values():
+        title_of.update(dict.fromkeys(same, same[0]))
+    return title_of, by_manual
+
+
 def _producers(res: RunResult) -> list[dict]:
 
-    groups: dict[str, list] = defaultdict(list)
+    by_name: dict[str, list] = defaultdict(list)
     for r in res.rows:
-        groups[r.pos.manufacturer or ""].append(r)
+        by_name[r.pos.manufacturer or ""].append(r)
+
+    title_of, by_manual = _group_titles(list(by_name))
+
+    # имя группы — самое частое написание, если человек не задал своё
+    by_title: dict[str, list[str]] = defaultdict(list)
+    for name, title in title_of.items():
+        by_title[title].append(name)
+    for title, same in by_title.items():
+        if title in by_manual or len(same) < 2:
+            continue
+        best = max(same, key=lambda n: (len(by_name[n]), -len(n)))
+        for name in same:
+            title_of[name] = best
+
+    grouped: dict[str, list] = defaultdict(list)
+    members: dict[str, list[str]] = defaultdict(list)
+    for name, rs in by_name.items():
+        title = title_of.get(name, name)
+        grouped[title].extend(rs)
+        if name:
+            members[title].append(name)
 
     total = len(res.rows)
     out = []
-    for name, rs in groups.items():
+    for name, rs in grouped.items():
         prices = [x.pos.price for x in rs if x.pos.price is not None]
+        spellings = sorted(members.get(name, []),
+                           key=lambda n: (-len(by_name[n]), n.lower()))
         out.append({
             "name": name or "производитель не определён",
             "unknown": not name,
@@ -548,9 +599,53 @@ def _producers(res: RunResult) -> list[dict]:
             "price_max": max(prices) if prices else None,
             "declarant": next((x.pos.declarant for x in rs if x.pos.declarant), ""),
             "ru": sorted({x.pos.ru_number for x in rs if x.pos.ru_number})[:5],
+            "spellings": [{"name": n, "positions": len(by_name[n])}
+                          for n in spellings],
+            "manual": name in by_manual,
         })
     out.sort(key=lambda m: (m["unknown"], -m["positions"], m["name"]))
     return out[:PRODUCERS_LIMIT]
+
+
+class GroupRequest(BaseModel):
+    job: str = ""
+    names: list[str] = Field(default_factory=list)
+    title: str = ""
+
+
+def _job_result(job_id: str) -> RunResult:
+    job = JOBS.get(job_id) or JOBS.get(CURRENT or "")
+    if job is None or job.result is None:
+        raise HTTPException(404, "Прогон не найден — сначала выполните поиск.")
+    return job.result
+
+
+@app.post("/api/groups/merge")
+async def groups_merge(req: GroupRequest) -> dict:
+
+    if len(req.names) < 2 and not req.title:
+        raise HTTPException(400, "Отметьте хотя бы два написания.")
+    title = groups.merge(req.names, req.title)
+    return {"title": title, "producers": _producers(_job_result(req.job))}
+
+
+@app.post("/api/groups/split")
+async def groups_split(req: GroupRequest) -> dict:
+
+    groups.split(req.names)
+    return {"producers": _producers(_job_result(req.job))}
+
+
+@app.post("/api/groups/rename")
+async def groups_rename(req: GroupRequest) -> dict:
+
+    if not req.title.strip():
+        raise HTTPException(400, "Название не может быть пустым.")
+    if req.names:
+        groups.rename(req.names[0], req.title)
+        if not groups.load().get(req.title):
+            groups.merge(req.names, req.title)
+    return {"producers": _producers(_job_result(req.job))}
 
 
 def _remarks(res: RunResult) -> list[str]:

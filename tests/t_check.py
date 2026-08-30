@@ -540,6 +540,38 @@ _KEEP = [Row(ContractMeta(), Position(mark=mk)) for mk in ("АРМЕД-230", "А
 _canon_mark_case(_KEEP)
 check("буквы и цифры не трогаются", [r.pos.mark for r in _KEEP],
       ["АРМЕД-230", "АРМЕД"])
+print("\n объединение производителей")
+import tempfile
+from app import groups as _groups
+
+check("организационная форма не мешает",
+      _groups.key('ООО "ДИКСИОН"') == _groups.key("Диксион, ООО"), True)
+check("кавычки и регистр не мешают",
+      _groups.key('ЗАО "ЗАВОД ЭМА"') == _groups.key("завод эма"), True)
+check("латиница остаётся отдельной фирмой",
+      _groups.key("DIXION") == _groups.key("Диксион"), False)
+check("разные заводы не сливаются",
+      _groups.key("Завод ЭМА") == _groups.key("НПЦ МТ АРМЕД"), False)
+
+_was = _groups.FILE
+_groups.FILE = pathlib.Path(tempfile.gettempdir()) / "t_groups.json"
+try:
+    _groups.FILE.unlink(missing_ok=True)
+    _groups.merge(["Диксион", "DIXION"], "Диксион")
+    check("объединение запомнилось",
+          _groups.index().get(_groups.key("DIXION")), "Диксион")
+    _groups.rename("Диксион", "ООО «Диксион»")
+    check("переименование дошло до обоих написаний",
+          _groups.index().get(_groups.key("Диксион")), "ООО «Диксион»")
+    _groups.merge(["ООО «Диксион»", "Dixion Group"])
+    check("третье написание доклеилось",
+          len(_groups.load().get("ООО «Диксион»", [])), 3)
+    _groups.split(["DIXION", "Диксион", "Dixion Group"])
+    check("разъединение очистило список", _groups.load(), {})
+finally:
+    _groups.FILE.unlink(missing_ok=True)
+    _groups.FILE = _was
+
 
 print("\n оценка времени прогона")
 from app.api import _eta

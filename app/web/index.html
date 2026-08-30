@@ -319,6 +319,11 @@ input:focus,textarea:focus{outline:2px solid var(--lime);outline-offset:-2px;
   white-space:nowrap}
 .tbl td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
 .tbl tbody tr:hover > td{background:var(--raised)}
+.tbl td.pick{width:34px;padding-right:0}
+.tbl input[type=checkbox]{width:15px;height:15px;accent-color:var(--lime);cursor:pointer}
+.spell{display:block;margin-top:5px;color:var(--faint);font-size:12px;line-height:1.5}
+.spell b{font-weight:600;color:var(--dim)}
+tr.grouped > td{background:rgba(203,242,81,.05)}
 .tbl .num{text-align:right}
 .tbl table th{position:static;background:transparent}
 .tbl table tr:hover > td{background:transparent}
@@ -507,7 +512,18 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
       <span class="count" id="manCount"></span>
     </div>
 
+    <div class="stack hidden" id="mergeBar" style="margin:0 0 12px">
+      <button id="doMerge" class="quiet small" type="button">Объединить отмеченные</button>
+      <button id="doRename" class="quiet small hidden" type="button">Переименовать</button>
+      <button id="doSplit" class="quiet small hidden" type="button">Разъединить</button>
+      <span class="hint" id="mergeHint" style="margin:0;flex:1;min-width:220px"></span>
+    </div>
+
     <div class="scrollbox"><div id="tabMan"></div></div>
+    <div class="hint" style="margin-top:10px">Один и тот же завод в контрактах
+      пишут по-разному. Отметьте строки, которые относятся к одной фирме,
+      и нажмите «Объединить» — программа запомнит это и будет сводить их
+      в следующих прогонах.</div>
   </div>
 
   <div class="panel hidden" id="histPanel">
@@ -586,6 +602,25 @@ function ask(title, body, yes){
     const close = v => { $('#dlg').classList.add('hidden'); resolve(v); };
     $('#dlgYes').onclick = () => close(true);
     $('#dlgNo').onclick = () => close(false);
+  });
+}
+
+function askText(title, value){
+  return new Promise(resolve => {
+    $('#dlgTitle').textContent = title;
+    $('#dlgBody').innerHTML =
+      '<p>Как называть эту фирму в списке и в сводке:</p>' +
+      '<input id="dlgInput" type="text" style="width:100%" spellcheck="false">';
+    $('#dlgYes').textContent = 'Сохранить';
+    $('#dlg').classList.remove('hidden');
+    const input = $('#dlgInput');
+    input.value = value || '';
+    input.focus();
+    input.select();
+    const close = v => { $('#dlg').classList.add('hidden'); resolve(v); };
+    input.onkeydown = e => { if(e.key === 'Enter') close(input.value.trim()); };
+    $('#dlgYes').onclick = () => close(input.value.trim());
+    $('#dlgNo').onclick = () => close('');
   });
 }
 
@@ -933,13 +968,22 @@ function renderProducers(){
   const list = TOP ? all.slice(0, TOP) : all;
   $('#manCount').textContent = 'показано ' + list.length + ' из ' + all.length + ' ' +
     plural(all.length, 'производителя', 'производителей', 'производителей');
+  $('#mergeBar').classList.toggle('hidden', all.length < 2);
   if(!list.length){ $('#tabMan').innerHTML = '<div class="hint">пусто</div>'; return; }
 
   const rows = list.map(m => {
     const name = m.unknown ? '<span class="guess">' + esc(m.name) + '</span>' : esc(m.name);
-    return '<tr>' +
-      '<td>' + name + (m.declarant ? '<div class="what">держатель РУ: ' +
-                                     esc(m.declarant) + '</div>' : '') + '</td>' +
+    const spells = (m.spellings || []);
+    const merged = spells.length > 1
+      ? '<span class="spell">' + (m.manual ? '<b>объединено вами:</b> ' : '<b>сведено само:</b> ') +
+        spells.map(x => esc(x.name) + ' (' + num(x.positions) + ')').join(' · ') + '</span>'
+      : '';
+    return '<tr' + (spells.length > 1 ? ' class="grouped"' : '') + '>' +
+      '<td class="pick">' + (m.unknown ? '' :
+        '<input type="checkbox" value="' + esc(m.name) + '" aria-label="отметить">') + '</td>' +
+      '<td>' + name + merged +
+        (m.declarant ? '<div class="what">держатель РУ: ' + esc(m.declarant) + '</div>' : '') +
+      '</td>' +
       '<td class="num">' + num(m.positions) + '</td>' +
       '<td class="num">' + num(m.contracts) + '</td>' +
       '<td class="num">' + num(m.units) + '</td>' +
@@ -951,10 +995,90 @@ function renderProducers(){
 
   $('#tabMan').innerHTML =
     '<table class="tbl"><thead><tr>' +
-    '<th>Производитель</th><th class="num">Позиций</th><th class="num">Контрактов</th>' +
+    '<th></th><th>Производитель</th><th class="num">Позиций</th>' +
+    '<th class="num">Контрактов</th>' +
     '<th class="num">Единиц</th><th class="num">Сумма, ₽</th><th class="num">Доля</th>' +
     '<th>№ РУ</th></tr></thead><tbody>' + rows + '</tbody></table>';
+
+  $$('#tabMan input[type=checkbox]').forEach(c => c.onchange = updateMergeBar);
+  updateMergeBar();
 }
+
+/* ── объединение производителей ─────────────────────────────────── */
+
+const pickedMan = () => $$('#tabMan input[type=checkbox]:checked').map(i => i.value);
+
+function groupOf(name){
+  return (LAST.producers || []).find(m => m.name === name);
+}
+
+function updateMergeBar(){
+  const picked = pickedMan();
+  const single = picked.length === 1 ? groupOf(picked[0]) : null;
+  const joined = single && (single.spellings || []).length > 1;
+  $('#doMerge').disabled = picked.length < 2;
+  $('#doRename').classList.toggle('hidden', !single);
+  $('#doSplit').classList.toggle('hidden', !joined);
+  $('#mergeHint').textContent = picked.length < 2
+    ? (single ? 'можно переименовать' + (joined ? ' или разъединить' : '')
+              : 'отметьте две строки и больше, чтобы объединить')
+    : 'отмечено ' + picked.length + ' — объединятся в одну фирму';
+}
+
+async function applyGroups(url, body){
+  try{
+    const r = await api(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(Object.assign({job: CURRENT_JOB}, body)),
+    });
+    LAST.producers = r.producers || [];
+    renderProducers();
+    return true;
+  }catch(e){ toast(e.message, true); return false; }
+}
+
+$('#doMerge').onclick = async () => {
+  const picked = pickedMan();
+  if(picked.length < 2) return;
+  const best = picked.slice().sort((a, b) =>
+    (groupOf(b).positions - groupOf(a).positions))[0];
+  const ok = await ask('Объединить производителей?',
+    '<p>' + picked.map(esc).join('<br>') + '</p>' +
+    '<p>Станут одной фирмой с названием <b>' + esc(best) + '</b> — его можно ' +
+    'изменить кнопкой «Переименовать». Программа запомнит объединение ' +
+    'и применит его в следующих прогонах.</p>', 'Объединить');
+  if(!ok) return;
+  if(await applyGroups('/api/groups/merge', {names: picked, title: best}))
+    toast('Объединено: ' + best);
+};
+
+$('#doRename').onclick = async () => {
+  const picked = pickedMan();
+  if(picked.length !== 1) return;
+  const now = picked[0];
+  const value = await askText('Название фирмы', now);
+  if(!value || value === now) return;
+  const group = groupOf(now);
+  const names = (group.spellings || []).map(x => x.name);
+  if(await applyGroups('/api/groups/rename',
+                       {names: names.length ? names : [now], title: value}))
+    toast('Теперь это «' + value + '»');
+};
+
+$('#doSplit').onclick = async () => {
+  const picked = pickedMan();
+  if(picked.length !== 1) return;
+  const group = groupOf(picked[0]);
+  const ok = await ask('Разъединить?',
+    '<p>Написания снова станут отдельными строками:</p><p>' +
+    (group.spellings || []).map(x => esc(x.name)).join('<br>') + '</p>',
+    'Разъединить');
+  if(!ok) return;
+  if(await applyGroups('/api/groups/split',
+                       {names: (group.spellings || []).map(x => x.name)
+                                .concat([picked[0]])}))
+    toast('Разъединено');
+};
 
 $$('[data-top]').forEach(chip => {
   chip.onclick = () => {
