@@ -32,6 +32,7 @@ EMPTY_TTL_DAYS = max(1, settings.cache_ttl_days // 4)
 
 @dataclass(slots=True)
 class RznRecord:
+    rzn_id: str = ""
     producer: str = ""
     producer_eng: str = ""
     producer_address: str = ""
@@ -399,6 +400,7 @@ class RznEnricher:
         sites = item.get("productionSites") or []
         eng = next((s.get("engName") or "" for s in sites if s.get("engName")), "").strip()
         return RznRecord(
+            rzn_id=str(item.get("id") or "").strip(),
             producer=(prod.get("name") or "").strip(),
             producer_eng=eng,
             producer_address=(prod.get("actualAddress") or prod.get("legalAddress") or "").strip(),

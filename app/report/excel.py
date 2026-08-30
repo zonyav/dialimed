@@ -17,6 +17,7 @@ HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(name=FONT_HEAD, color="FFFFFF", bold=False, size=11)
 BODY_FONT = Font(name=FONT, size=11)
 LINK_FONT = Font(name=FONT, size=11, color="1F6FEB", underline="single")
+RU_LINK_FONT = Font(name=FONT, size=11, color="1F6FEB", underline="single")
 
 ALT_FILL = PatternFill("solid", fgColor="F4F6FA")
 PRICE_FILL = PatternFill("solid", fgColor="FFF3C4")
@@ -113,6 +114,12 @@ def _sheet_positions(ws: Worksheet, result: RunResult) -> None:
             cell = ws.cell(row=r, column=idx[name])
             if not cell.value or cell.value == DASH:
                 cell.fill = MISSING_FILL
+
+        card = row.pos.rzn_url
+        if card:
+            ru = ws.cell(row=r, column=idx["№ РУ"])
+            ru.hyperlink = card
+            ru.font = RU_LINK_FONT
 
         link = ws.cell(row=r, column=idx[LINK_COLUMN])
         if isinstance(link.value, str) and link.value.startswith("http"):

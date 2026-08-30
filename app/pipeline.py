@@ -343,6 +343,7 @@ def _drop_without_ru(rows: list[Row], result: RunResult) -> None:
         p.manufacturer = ""
         p.declarant = ""
         p.declarant_inn = ""
+        p.rzn_id = ""
         p.manufacturer_source = ""
         p.confidence = "low"
     if dropped:
@@ -1059,6 +1060,8 @@ def _apply_registry(p: Position, rec, source: str = "") -> None:
     eng = _mark_key(rec.producer_eng)
     if eng and p.mark and len(p.mark.split()) >= 3 and _mark_key(p.mark) in eng:
         p.mark = ""
+    if getattr(rec, "rzn_id", ""):
+        p.rzn_id = rec.rzn_id
     if rec.declarant:
         p.declarant = rec.declarant
     if rec.declarant_inn:

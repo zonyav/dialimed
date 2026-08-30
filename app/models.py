@@ -6,6 +6,8 @@ from typing import Optional
 
 DASH = "—"
 
+RZN_CARD = "https://elk.roszdravnadzor.gov.ru/widget/med-product/"
+
 NO_BIDDING = "торгов не было"
 NO_NMCK = "начальная цена не найдена"
 SMALL_VOLUME = "торгов не было: закупка малого объёма"
@@ -125,6 +127,7 @@ class Position:
     tu_number: str = ""
     ru_registry_name: str = ""
     ru_status: str = ""
+    rzn_id: str = ""
     kind_evidence: str = ""
     ru_variants: str = ""
     erul: str = ""
@@ -145,6 +148,14 @@ class Position:
     country: str = ""
     total: Optional[float] = None
     raw_medical_block: str = ""
+
+    @property
+    def rzn_url(self) -> str:
+        """Карточка регистрационного удостоверения в открытом реестре РЗН."""
+
+        if not self.rzn_id:
+            return ""
+        return f"{RZN_CARD}{self.rzn_id}"
 
     def matches_ktru(self, wanted: set[str]) -> bool:
         return bool(self.ktru) and self.ktru in wanted
