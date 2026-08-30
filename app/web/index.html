@@ -105,10 +105,12 @@ h1{
 
 h1.hidden + .lede{margin-top:28px}
 
-.figures{display:flex;gap:52px;flex-wrap:wrap;margin:44px 0 8px}
-.fig .v{font:300 40px/1 var(--f-display);
+.figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(124px,1fr));
+  gap:24px 26px;margin:38px 0 8px}
+.fig .v{font:300 34px/1 var(--f-display);
   letter-spacing:-.03em;font-variant-numeric:tabular-nums}
 .fig .v small{font-size:19px;color:var(--dim);margin-left:6px;letter-spacing:0}
+.fig .v.money{font-size:25px;line-height:1.36}
 .fig .k{color:var(--faint);font-size:12.5px;margin-top:6px}
 
 nav{display:flex;gap:30px;margin:46px 0 0;border-bottom:1px solid var(--line);
@@ -322,10 +324,10 @@ input:focus,textarea:focus{outline:2px solid var(--lime);outline-offset:-2px;
 .chart{display:flex;gap:30px;align-items:center;flex-wrap:wrap;
   margin:4px 0 20px;color:var(--ink)}
 .legend{flex:1;min-width:280px;display:grid;gap:8px}
-.legend .row{display:grid;grid-template-columns:12px 1fr 62px auto;gap:12px;
-  align-items:center;font-size:13px}
-.legend .row.head{color:var(--faint);font-size:11px;text-transform:uppercase;
-  letter-spacing:.08em}
+.legend .line{display:grid;grid-template-columns:12px 1fr 62px;gap:12px;
+  align-items:center;font-size:13.5px;padding:2px 0}
+.legend .cap{color:var(--faint);font-size:11px;text-transform:uppercase;
+  letter-spacing:.09em;margin-bottom:2px}
 .legend .dot{width:11px;height:11px;border-radius:3px}
 .legend .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .legend .pc{text-align:right;font-variant-numeric:tabular-nums;color:var(--dim)}
@@ -458,6 +460,14 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
 
   <div id="alerts" style="margin-top:18px"></div>
 
+  <div class="panel hidden" id="queryBar" style="margin-top:26px">
+    <div class="stack">
+      <span id="queryText" style="flex:1;min-width:220px;font-size:14px;
+        color:var(--dim);line-height:1.5"></span>
+      <button id="editQuery" class="quiet small" type="button">Изменить запрос</button>
+    </div>
+  </div>
+
   <div class="panel setup">
    <div>
     <label for="ktru">Коды КТРУ или НКМИ</label>
@@ -522,8 +532,8 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
       <span class="chip on" data-top="5" role="button" tabindex="0" aria-pressed="true">Топ 5</span>
       <span class="chip" data-top="10" role="button" tabindex="0" aria-pressed="false">Топ 10</span>
       <span class="chip" data-top="0" role="button" tabindex="0" aria-pressed="false">Все</span>
-      <button id="dl" class="small" type="button">Скачать XLSX</button>
       <span class="count" id="manCount"></span>
+      <button id="dl" class="small" type="button">Скачать XLSX</button>
     </div>
 
     <div id="chart"></div>
@@ -856,6 +866,31 @@ function startClock(){
 
 function stopClock(){ clearInterval(timer); timer = null; }
 
+/* после запуска форма сворачивается в одну строку — результаты
+   оказываются наверху, а не под пустой формой */
+function collapseForm(text){
+  const on = !!text;
+  $('#queryText').textContent = text || '';
+  $('#queryBar').classList.toggle('hidden', !on);
+  $('.setup').classList.toggle('hidden', on);
+  document.querySelector('h1').classList.toggle('hidden', on);
+  document.querySelector('.lede').classList.toggle('hidden', on);
+}
+
+function queryNote(p){
+  const codes = p.ktru.split('\n').map(x => x.trim()).filter(Boolean);
+  const cap = Number(p.limit_per_ktru);
+  return codes.join(', ') + ' · с ' + p.date_from +
+         (p.date_to ? ' по ' + p.date_to : ' по сегодня') +
+         (cap ? ' · не больше ' + cap + ' ' +
+                plural(cap, 'контракта', 'контрактов', 'контрактов') + ' на код' : '');
+}
+
+$('#editQuery').onclick = () => {
+  collapseForm('');
+  window.scrollTo({top: 0, behavior: 'smooth'});
+};
+
 $('#go').onclick = async () => {
   const p = params();
   if(!p.ktru.trim()){ toast('Укажите хотя бы один код КТРУ или НКМИ', true); return; }
@@ -866,6 +901,7 @@ $('#go').onclick = async () => {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(p),
     });
+    collapseForm(queryNote(p));
     attach(res.job);
   }catch(e){
     toast(e.message, true);
@@ -945,8 +981,8 @@ function onDone(item){
 
 /* ── результат ──────────────────────────────────────────────────── */
 
-function fig(value, key, small){
-  return '<div class="fig"><div class="v">' + value +
+function fig(value, key, small, cls){
+  return '<div class="fig"><div class="v' + (cls ? ' ' + cls : '') + '">' + value +
          (small ? '<small>' + small + '</small>' : '') +
          '</div><div class="k">' + key + '</div></div>';
 }
@@ -959,7 +995,7 @@ function renderResults(item){
     fig(num(s.producers), 'производителей'),
     fig(num(s.with_manufacturer), 'с производителем', s.with_manufacturer_pct + '%'),
     fig(num(s.with_ru), 'с номером РУ', s.with_ru_pct + '%'),
-    fig(money(s.sum), 'сумма по позициям, ₽'),
+    fig(num(Math.round(s.sum || 0)), 'сумма по позициям, ₽', '', 'money'),
   ];
   if(s.discount !== null && s.discount !== undefined)
     figs.push(fig(s.discount + '%', 'снижение, медиана'));
@@ -1049,18 +1085,15 @@ function renderChart(all){
   if(items.length < 2){ $('#chart').innerHTML = ''; return; }
   const total = items.reduce((a, x) => a + x.value, 0);
   const legend = items.map(x =>
-    '<div class="row">' +
+    '<div class="line">' +
     '<span class="dot" style="background:' + x.color + '"></span>' +
     '<span class="nm" title="' + esc(x.name) + '">' + esc(x.name) + '</span>' +
     '<span class="pc">' + pct(100 * x.value / total) + '</span>' +
-    '<span class="sm">' + money(x.value) + '</span>' +
     '</div>').join('');
   $('#chart').innerHTML =
     '<div class="chart">' + donut(items) +
     '<div class="legend">' +
-    '<div class="row head"><span></span><span class="nm">Доля рынка по сумме</span>' +
-    '<span class="pc"></span><span class="sm"></span></div>' +
-    legend + '</div></div>';
+    '<div class="cap">Доля рынка по сумме</div>' + legend + '</div></div>';
 }
 
 const COLS = [
@@ -1227,13 +1260,19 @@ $('#dl').onclick = () => {
 
 /* ── прошлые отчёты ─────────────────────────────────────────────── */
 
+/* «2026-08-31T00:30» -> «31.08.2026, 00:30» */
+function ruWhen(iso){
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2})/.exec(iso || '');
+  return m ? m[3] + '.' + m[2] + '.' + m[1] + ', ' + m[4] : (iso || '');
+}
+
 async function loadReports(){
   try{
     const r = await api('/api/reports?limit=20');
     const items = r.reports || [];
     if(!items.length){ $('#histPanel').classList.add('hidden'); return; }
     $('#hist').innerHTML = items.map(x => {
-      const when = (x.saved || '').replace('T', ' ').slice(0, 16);
+      const when = ruWhen(x.saved);
       const rows = x.rows ? num(x.rows) + ' ' + plural(x.rows, 'позиция', 'позиции', 'позиций') : '';
       return '<div class="item" data-file="' + esc(x.file) + '">' +
              '<span class="c-date">' + esc(when) + '</span>' +
@@ -1294,8 +1333,10 @@ function ping(){
 function lost(){
   if(LOST) return;
   LOST = true;
-  toast('Программа не отвечает — похоже, она уже закрыта. ' +
-        'Запустите Medizdeliya.exe заново.', true);
+  $('#alerts').innerHTML =
+    '<div class="note err"><b>Программа не отвечает</b>Похоже, она уже закрыта. ' +
+    'Запустите <b>Medizdeliya.exe</b> заново — отчёты и кэш на месте.</div>';
+  toast('Программа не отвечает — запустите Medizdeliya.exe заново.', true);
 }
 
 function heartbeat(){
@@ -1333,18 +1374,20 @@ $('#quit').onclick = async () => {
 
 async function boot(){
   heartbeat();
-  await loadStatus();
+  loadStatus().catch(() => lost());
   loadReports();
   try{
     const cur = await api('/api/current');
     if(cur.job){
       $('#ctx').textContent = cur.note || '';
+      collapseForm(cur.note || 'идёт прогон');
       attach(cur.job);
     } else if(cur.last){
       const st = await api('/api/job/' + cur.last);
       if(st.summary && st.summary.rows){
         CURRENT_JOB = cur.last;
         $('#ctx').textContent = st.note || '';
+        collapseForm(st.note || '');
         onDone(st.summary);
         $('#results').classList.remove('hidden');
       }

@@ -102,8 +102,10 @@ CURRENT: Optional[str] = None
 # браузер замораживает таймеры в фоновой вкладке, и программа умирала, пока
 # человек смотрел уже выгруженный отчёт. Поэтому выходим по явному сигналу
 # «вкладку закрыли» (/api/bye), выждав CLOSE_GRACE — перезагрузка страницы
-# шлёт такой же сигнал, но сразу возвращается и отменяет выход.
-CLOSE_GRACE = 25.0
+# шлёт такой же сигнал, но сразу возвращается и отменяет выход. Запас большой
+# намеренно: браузер шлёт то же прощание, когда выгружает фоновую вкладку,
+# а вернувшись к ней, человек ждёт программу на месте.
+CLOSE_GRACE = 120.0
 ALIVE_CHECK = 5.0
 IDLE_LIMIT = settings.idle_hours * 3600.0
 _last_ping: float = 0.0
@@ -229,7 +231,10 @@ async def status() -> dict:
     from .update import check as check_update
 
     async with RznEnricher() as rzn:
-        rzn_ok = await rzn.available()
+        try:
+            rzn_ok = await asyncio.wait_for(rzn.available(), 8.0)
+        except asyncio.TimeoutError:
+            rzn_ok = False
     busy = _busy_job()
     return {
         "rzn": {"ok": rzn_ok},
