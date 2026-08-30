@@ -197,6 +197,77 @@ def parse_contract_xml(data: bytes, meta: ContractMeta | None = None
     return m, positions
 
 
+# --- характеристики позиции из карточки КТРУ в контракте ---------------
+# ЕИС хранит их тремя способами: качественное значение словами, число
+# с единицей измерения и диапазон «от и до». Приводим всё к строке
+# «Имя: значение», чтобы позиции можно было сравнивать глазами.
+
+_SIGNS = {"greaterOrEqual": "≥", "greater": ">",
+          "lessOrEqual": "≤", "less": "<"}
+
+
+def _unit(value) -> str:
+    okei = value.find("./{*}OKEI")
+    if okei is None:
+        return ""
+    code = _text(okei, "./{*}nationalCode") or _text(okei, "./{*}name")
+    # «ММ» -> «мм», но однобуквенные обозначения оставляем как есть: «К»
+    return code.lower() if len(code) > 1 else code
+
+
+def _edge(rng, side: str) -> str:
+    num = _text(rng, f"./{{*}}{side}")
+    if not num:
+        return ""
+    sign = _SIGNS.get(_text(rng, f"./{{*}}{side}MathNotation"), "")
+    return f"{sign} {num}".strip() if sign in (">", "<") else num
+
+
+def _value_text(value) -> str:
+
+    quality = _text(value, "./{*}qualityDescription")
+    if quality:
+        return quality
+
+    unit = _unit(value)
+    concrete = _text(value, ".//{*}concreteValue")
+    if concrete:
+        return f"{concrete} {unit}".strip()
+
+    rng = value.find(".//{*}valueRange")
+    if rng is not None:
+        low, high = _edge(rng, "min"), _edge(rng, "max")
+        if low and high:
+            return f"{low}–{high} {unit}".strip()
+        if low:
+            return f"от {low} {unit}".strip()
+        if high:
+            return f"до {high} {unit}".strip()
+    return ""
+
+
+def parse_characteristics(product) -> list[tuple[str, str]]:
+
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for block in product.iter("{*}characteristics"):
+        for ch in block:
+            tag = etree.QName(ch).localname
+            if not tag.startswith("characteristicsUsing"):
+                continue
+            name = _text(ch, "./{*}name")
+            if not name:
+                continue
+            values = [_value_text(v) for v in ch.iter("{*}value")]
+            value = ", ".join(v for v in values if v)
+            key = name.lower()
+            if not value or key in seen:
+                continue
+            seen.add(key)
+            out.append((name, value))
+    return out
+
+
 def _parse_product(p, index: int) -> Position:
     pos = Position(index=index)
 
@@ -224,6 +295,8 @@ def _parse_product(p, index: int) -> Position:
         pos.nkmi_code = _text(mp, "./{*}medicalProductCode")
         pos.nkmi_name = _text(mp, "./{*}medicalProductName")
         pos.ru_name = _text(mp, "./{*}certificateNameMedicalProduct")
+
+    pos.specs = parse_characteristics(p)
 
     okei = _block(p, "OKEIInfo")
     if okei is not None:

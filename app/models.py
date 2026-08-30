@@ -148,6 +148,13 @@ class Position:
     country: str = ""
     total: Optional[float] = None
     raw_medical_block: str = ""
+    specs: list = field(default_factory=list)
+
+    @property
+    def specs_text(self) -> str:
+        """Характеристики позиции одной строкой: «Имя: значение; …»."""
+
+        return "; ".join(f"{n}: {v}" for n, v in self.specs)
 
     @property
     def rzn_url(self) -> str:
@@ -201,6 +208,7 @@ class Row:
             "Заказчик": _clean(m.customer),
             "Поставщик": _clean(m.supplier),
             "ИНН поставщика": _clean(m.supplier_inn),
+            "Характеристики": _clean(p.specs_text),
         }
 
 

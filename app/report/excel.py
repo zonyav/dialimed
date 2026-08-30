@@ -61,6 +61,7 @@ LAYOUT: dict[str, tuple[int, str, Optional[str], bool]] = {
     "Заказчик": (40, LEFT, None, True),
     "Поставщик": (34, LEFT, None, True),
     "ИНН поставщика": (16, CENTER, None, False),
+    "Характеристики": (70, LEFT, None, True),
 }
 
 DEFAULT_LAYOUT = (18, LEFT, None, False)
