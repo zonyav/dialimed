@@ -9,7 +9,6 @@ import logging
 import re
 import sqlite3
 import time
-from contextlib import closing
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Iterable, Optional
@@ -194,14 +193,21 @@ def _complete(items: list[dict], size: Optional[int], total: Optional[int]) -> b
 
 
 class RznCache:
+    """Ответы реестра на диске. Соединение одно на прогон — см. eis.client.Cache."""
+
     def __init__(self, db_path):
         self.db_path = db_path
         self._lock = asyncio.Lock()
-        with closing(sqlite3.connect(self.db_path)) as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("""CREATE TABLE IF NOT EXISTS rzn (
-                              key TEXT PRIMARY KEY, payload TEXT, ts INTEGER)""")
-            db.commit()
+        self._db = sqlite3.connect(db_path, check_same_thread=False)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("""CREATE TABLE IF NOT EXISTS rzn (
+                                key TEXT PRIMARY KEY, payload TEXT, ts INTEGER)""")
+        self._db.commit()
+
+    def close(self) -> None:
+        if self._db is not None:
+            self._db.close()
+            self._db = None
 
     @staticmethod
     def _key(kind: str, value: str) -> str:
@@ -212,9 +218,8 @@ class RznCache:
             return await asyncio.to_thread(self._get, kind, value, size)
 
     def _get(self, kind: str, value: str, size: int) -> Optional[_Answer]:
-        with closing(sqlite3.connect(self.db_path)) as db:
-            row = db.execute("SELECT payload, ts FROM rzn WHERE key=?",
-                             (self._key(kind, value),)).fetchone()
+        row = self._db.execute("SELECT payload, ts FROM rzn WHERE key=?",
+                               (self._key(kind, value),)).fetchone()
         if not row:
             return None
         try:
@@ -242,11 +247,11 @@ class RznCache:
     def _put(self, kind: str, value: str, items: list, size: int,
              total: Optional[int]) -> None:
         payload = {"c": items, "s": size, "t": total}
-        with closing(sqlite3.connect(self.db_path)) as db:
-            db.execute("INSERT OR REPLACE INTO rzn(key, payload, ts) VALUES (?,?,?)",
-                       (self._key(kind, value), json.dumps(payload, ensure_ascii=False),
-                        int(time.time())))
-            db.commit()
+        self._db.execute(
+            "INSERT OR REPLACE INTO rzn(key, payload, ts) VALUES (?,?,?)",
+            (self._key(kind, value), json.dumps(payload, ensure_ascii=False),
+             int(time.time())))
+        self._db.commit()
 
 
 class RznEnricher:
@@ -287,6 +292,8 @@ class RznEnricher:
         if self._client:
             await self._client.aclose()
             self._client = None
+        if self.cache:
+            self.cache.close()
 
     async def available(self) -> bool:
 
@@ -546,8 +553,6 @@ class RznEnricher:
         return out
 
 
-_ARTICLE_TOKEN = re.compile(r"(?<![\w-])(?:\d{2,4}[A-Za-zА-Яа-я\-][\w\-]*|\d{2,4}|"
-                            r"[A-Za-zА-Яа-я]{1,3}[-\s]?\d{1,4}[A-Za-zА-Яа-я+]*)(?![\w-])")
 def _same_device_kind(registry_name: str, hints: list[str]) -> bool:
 
     t = _norm(registry_name)
@@ -567,9 +572,4 @@ def _same_device_kind(registry_name: str, hints: list[str]) -> bool:
     return False
 
 
-_TRAIL = re.compile(
-    r"\s*(?:,?\s*(?:с\s+принадлежностями|вариант\w*\s+исполнени\w*|в\s+вариант\w*\s+исполнени\w*|"
-    r"модел[иья]|исполнени\w*)\b.*)$",
-    re.I,
-)
 _TU = re.compile(r"\s*(?:по\s+)?\bТУ\s*[-–]?\s*№?\s*[\w\-.]+.*$", re.I)

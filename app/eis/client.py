@@ -7,6 +7,7 @@ import logging
 import random
 import sqlite3
 import time
+import zlib
 from contextlib import closing
 from pathlib import Path
 from typing import Optional
@@ -27,14 +28,12 @@ _ZLIB_MAGIC = b"\x78\x9c"
 
 
 def _compress(body: bytes) -> bytes:
-    import zlib
     return zlib.compress(body, 6)
 
 
 def _decompress(body: bytes) -> bytes:
     if not body[:2] == _ZLIB_MAGIC:
         return body
-    import zlib
     try:
         return zlib.decompress(body)
     except zlib.error:
@@ -42,30 +41,48 @@ def _decompress(body: bytes) -> bytes:
 
 
 class Cache:
+    """Диск-кэш ответов ЕИС.
+
+    Соединение с SQLite одно на весь прогон: открывать его заново на каждый
+    запрос — это тысячи лишних открытий файла за прогон. Обращения к нему
+    и так выстроены в очередь общим asyncio-замком, поэтому обходимся без
+    проверки потока (работа идёт в потоках asyncio.to_thread).
+    """
 
     def __init__(self, db_path: Path, ttl_days: int):
         self.db_path = db_path
         self.ttl = ttl_days * 86400
         self._lock = asyncio.Lock()
+        self._db: Optional[sqlite3.Connection] = None
         self._init()
+
+    def _conn(self) -> sqlite3.Connection:
+        if self._db is None:
+            self._db = sqlite3.connect(self.db_path, check_same_thread=False)
+        return self._db
+
+    def close(self) -> None:
+        if self._db is not None:
+            self._db.close()
+            self._db = None
 
     def _init(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.db_path)) as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute(
-                """CREATE TABLE IF NOT EXISTS http (
-                       key TEXT PRIMARY KEY,
-                       url TEXT NOT NULL,
-                       filename TEXT,
-                       body BLOB NOT NULL,
-                       ts INTEGER NOT NULL
-                   )"""
-            )
-            db.execute("CREATE INDEX IF NOT EXISTS ix_http_ts ON http(ts)")
-            for legacy in ("llm", "marks"):
-                db.execute(f"DROP TABLE IF EXISTS {legacy}")
-            db.commit()
+        db = self._conn()
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS http (
+                   key TEXT PRIMARY KEY,
+                   url TEXT NOT NULL,
+                   filename TEXT,
+                   body BLOB NOT NULL,
+                   ts INTEGER NOT NULL
+               )"""
+        )
+        db.execute("CREATE INDEX IF NOT EXISTS ix_http_ts ON http(ts)")
+        for legacy in ("llm", "marks"):
+            db.execute(f"DROP TABLE IF EXISTS {legacy}")
+        db.commit()
 
     @staticmethod
     def _key(url: str) -> str:
@@ -77,11 +94,10 @@ class Cache:
 
     def _get_sync(self, url: str) -> Optional[tuple[bytes, str]]:
         cutoff = int(time.time()) - self.ttl
-        with closing(sqlite3.connect(self.db_path)) as db:
-            row = db.execute(
-                "SELECT body, filename FROM http WHERE key=? AND ts>=?",
-                (self._key(url), cutoff),
-            ).fetchone()
+        row = self._conn().execute(
+            "SELECT body, filename FROM http WHERE key=? AND ts>=?",
+            (self._key(url), cutoff),
+        ).fetchone()
         if not row:
             return None
         return _decompress(row[0]), (row[1] or "")
@@ -91,22 +107,16 @@ class Cache:
             await asyncio.to_thread(self._put_sync, url, body, filename)
 
     def _put_sync(self, url: str, body: bytes, filename: str) -> None:
-        with closing(sqlite3.connect(self.db_path)) as db:
-            db.execute(
-                "INSERT OR REPLACE INTO http(key, url, filename, body, ts) VALUES (?,?,?,?,?)",
-                (self._key(url), url, filename, _compress(body), int(time.time())),
-            )
-            db.commit()
-
-    def clear(self) -> int:
-        with closing(sqlite3.connect(self.db_path)) as db:
-            n = db.execute("SELECT COUNT(*) FROM http").fetchone()[0]
-            db.execute("DELETE FROM http")
-            db.commit()
-        return n
+        db = self._conn()
+        db.execute(
+            "INSERT OR REPLACE INTO http(key, url, filename, body, ts) VALUES (?,?,?,?,?)",
+            (self._key(url), url, filename, _compress(body), int(time.time())),
+        )
+        db.commit()
 
     def compact(self) -> tuple[int, int, int]:
 
+        self.close()
         before = self.db_path.stat().st_size if self.db_path.exists() else 0
         packed = 0
         with closing(sqlite3.connect(self.db_path)) as db:
@@ -163,6 +173,8 @@ class EisClient:
         if self._client:
             await self._client.aclose()
             self._client = None
+        if self.cache:
+            self.cache.close()
 
     async def fetch(self, url: str, *, cacheable: bool = True) -> tuple[bytes, str]:
         if self.cache and cacheable:
