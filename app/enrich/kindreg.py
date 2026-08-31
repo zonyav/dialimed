@@ -29,15 +29,6 @@ class KindSlice:
     def ok(self) -> bool:
         return bool(self.records)
 
-    def active(self) -> list[RznRecord]:
-
-        return [r for r in self.records if _is_active(r.status)]
-
-
-def _is_active(status: str) -> bool:
-    from .kindmatch import is_active
-    return is_active(status)
-
 
 async def fetch(code: str, enricher: RznEnricher) -> KindSlice:
     code = (code or "").strip()

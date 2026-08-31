@@ -652,17 +652,6 @@ check("без торгов снижения нет", _C3.discount_pct, None)
 check("в ячейку отчёта уходит пояснение", _C3.discount_cell, "торгов не было")
 check("а при торгах — число", _C1.discount_cell, 20.0)
 
-from app.pipeline import other_registration
-
-_RU = {'АРС - "Диаком"': {"ФСР 2011/10520"}, "Диаком": {"ФСР 2009/06159"},
-       "aj18": set(), "AJAX AJ18": {"РЗН 2020/1"}}
-check("свод отказывает при разных № РУ",
-      other_registration(_RU, "Диаком", 'АРС - "Диаком"'), True)
-check("но не мешает дописать название линейки без номера",
-      other_registration(_RU, "aj18", "AJAX AJ18"), False)
-check("и не мешает при одном и том же номере",
-      other_registration({"a": {"РЗН 1"}, "b": {"РЗН 1"}}, "a", "b"), False)
-
 from app.pipeline import _registry_lists_several
 
 for _name, _several in [

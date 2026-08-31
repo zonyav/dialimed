@@ -525,18 +525,6 @@ def paren_articles(text: str) -> list[str]:
     return out
 
 
-def enumerated_tail(text: str) -> str:
-
-    full = " ".join((text or "").split())
-    arts = (enumerated_articles(paren_articles(full))
-            or enumerated_articles(quoted_marks(full)))
-    if not arts:
-        head = _REG_LIST_HEAD.search(full)
-        return full[head.start():] if head and variants_in_registry_name(full) else ""
-    head = cut_article_list(full, arts)
-    return full[len(head):] if full.startswith(head) and head != full else ""
-
-
 def cut_article_list(s: str, articles: list[str]) -> str:
 
     if not articles:

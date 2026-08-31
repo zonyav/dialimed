@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from datetime import date
 from typing import Optional
@@ -12,10 +11,6 @@ from selectolax.parser import HTMLParser
 from ..models import ContractMeta, Position
 from .search import normalize_purchase_number
 from .xml_parser import _is_real_trademark
-
-log = logging.getLogger(__name__)
-
-_OBJECT_HDR = re.compile(r"(?:3\.1\.?\s*Объект\s+закупки|Раздел\s+II\.?\s*Объект\s+закупки)", re.I)
 
 _NKMI = re.compile(r"код\s*НКМИ\s*[:\s]\s*(\d{3,8})", re.I)
 _NKMI_NAME = re.compile(r"код\s*НКМИ\s*[:\s]\s*\d{3,8}\s*[:\s]\s*([^,)]{3,160})", re.I)
@@ -183,10 +178,6 @@ def _parse_row(texts: list[str], cols: dict[str, int]) -> Optional[Position]:
         pos.total = round(pos.price * pos.quantity, 2)
 
     _parse_name_cell(pos, name_cell)
-    parts = [pos.name, pos.ru_name]
-    if pos.trademark:
-        parts.append(pos.trademark)
-    pos.raw_medical_block = " | ".join(x for x in parts if x)
     return pos
 
 
@@ -204,8 +195,6 @@ def _parse_name_cell(pos: Position, cell: str) -> None:
         tm = m.group(1).strip(" .,;:")
         if _is_real_trademark(tm):
             pos.trademark = tm
-        else:
-            pos.trademark_raw = tm
     body = _TRADEMARK.sub(" ", cell)
 
     mb = re.search(r"\(\s*объект закупки является медицинским издели\w*(.*)$",

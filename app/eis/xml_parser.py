@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import html
-import logging
 import re
 from datetime import date, datetime
 from typing import Optional
@@ -11,8 +10,6 @@ from lxml import etree
 
 from ..models import ContractMeta, Position
 from .search import normalize_purchase_number
-
-log = logging.getLogger(__name__)
 
 
 def _block(parent, tag: str):
@@ -321,7 +318,6 @@ def _parse_product(p, index: int) -> Position:
     if country is not None:
         pos.country = _text(country, "./{*}countryFullName") or _text(country, "./{*}countryCode")
 
-    parts = [pos.name, pos.ru_name]
     tm = _text_any(p, "tradeMark", "trademark")
     if tm:
         cleaned = clean_trademark(tm)
@@ -329,8 +325,4 @@ def _parse_product(p, index: int) -> Position:
             tm = cleaned
         if _is_real_trademark(tm):
             pos.trademark = tm
-            parts.append(tm)
-        else:
-            pos.trademark_raw = tm
-    pos.raw_medical_block = " | ".join(x for x in parts if x)
     return pos

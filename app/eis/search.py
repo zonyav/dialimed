@@ -193,7 +193,6 @@ async def search_ktru(
     date_to: str = "",
     stages: Iterable[str] = DEFAULT_STAGES,
     limit: int = 0,
-    progress: callable | None = None,
 ) -> tuple[list[ContractMeta], int]:
 
     page_size = settings.eis_page_size
@@ -202,9 +201,6 @@ async def search_ktru(
     html = await client.fetch_text(first_url)
     total = total_found(html)
     metas = parse_search_page(html)
-    if progress:
-        progress(ktru, 1, max(1, _pages(total, page_size, limit)), total)
-
     if not metas:
         return [], total
 
@@ -222,8 +218,6 @@ async def search_ktru(
         except Exception as e:
             log.warning("КТРУ %s стр.%d: %s", ktru, p, e)
             res = []
-        if progress:
-            progress(ktru, p, pages, total)
         return res
 
     rest = await asyncio.gather(*(one(p) for p in range(2, pages + 1)))

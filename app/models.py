@@ -123,16 +123,13 @@ class Position:
     nkmi_name: str = ""
     ru_name: str = ""
     ru_number: str = ""
-    ru_numbers_all: str = ""
     tu_number: str = ""
     ru_registry_name: str = ""
     ru_status: str = ""
     rzn_id: str = ""
-    kind_evidence: str = ""
     ru_variants: str = ""
     erul: str = ""
     trademark: str = ""
-    trademark_raw: str = ""
     manufacturer: str = ""
     declarant: str = ""
     declarant_inn: str = ""
@@ -147,7 +144,6 @@ class Position:
     vat: str = ""
     country: str = ""
     total: Optional[float] = None
-    raw_medical_block: str = ""
     specs: list = field(default_factory=list)
 
     @property

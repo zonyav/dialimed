@@ -68,11 +68,6 @@ def clear(areas: list[str]) -> dict[str, int]:
     return done
 
 
-def clear_all() -> dict[str, int]:
-
-    return clear(list(AREAS))
-
-
 def size_mb() -> float:
     path = Path(settings.cache_db)
     return round(path.stat().st_size / 1048576, 1) if path.exists() else 0.0

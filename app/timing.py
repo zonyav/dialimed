@@ -44,10 +44,6 @@ def record(contracts: int, seconds: float, fresh_share: float) -> None:
         log.debug("замер темпа не сохранён: %s", e)
 
 
-def estimate(contracts: int) -> float:
-    return max(0.0, contracts * per_contract())
-
-
 def human(seconds: float) -> str:
     """«около 4 минут» — так, как сказал бы человек."""
 

@@ -86,7 +86,3 @@ async def _fetch(code: str) -> NkmiKind:
                         record_id=str(item.get("recordId") or "").strip())
     return NkmiKind(code=code, note="такого кода вида нет в номенклатуре "
                                     "Росздравнадзора — проверьте цифры")
-
-
-def _cache_size() -> int:
-    return len(_CACHE)
