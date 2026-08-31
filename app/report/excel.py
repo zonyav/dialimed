@@ -59,11 +59,14 @@ LAYOUT: dict[str, tuple[int, str, Optional[str], bool]] = {
     "Сумма по позиции, ₽": (18, CENTER, MONEY, False),
     "Ставка НДС": (12, CENTER, None, False),
     "Цена контракта, ₽": (18, CENTER, MONEY, False),
+    "НМЦК, ₽": (18, CENTER, MONEY, False),
     "Снижение, %": (26, LEFT, PERCENT, True),
     "Заказчик": (40, LEFT, None, True),
     "Поставщик": (34, LEFT, None, True),
     "ИНН поставщика": (16, CENTER, None, False),
-    "Характеристики": (70, LEFT, None, True),
+    # характеристики не переносим: строка из десятка пар «имя: значение»
+    # растягивала строку на пол-экрана, а рядом с ней всё остальное пусто
+    "Характеристики": (70, LEFT, None, False),
 }
 
 DEFAULT_LAYOUT = (18, LEFT, None, False)
