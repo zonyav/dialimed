@@ -239,7 +239,8 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
   font:400 14px/1.2 var(--f-text)}
 .mergebar .hint{margin:0;flex:1;min-width:190px;text-align:right}
 
-/* высота меньше окна: переключатель «Топ N» не должен уезжать под край */
+/* список производителей показывается целиком, поэтому прокручивается
+   внутри себя: иначе поиск и панель объединения уезжают за край окна */
 .scrollbox{overflow:auto;margin-top:18px;max-height:min(62vh,760px)}
 .tbl{width:100%;border-collapse:collapse;font-size:14px;table-layout:fixed;
   min-width:940px}
@@ -414,9 +415,6 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
 
     <div class="find">
       <span class="ttl">Производители</span>
-      <button class="chip on" data-top="5" type="button" aria-pressed="true">Топ 5</button>
-      <button class="chip" data-top="10" type="button" aria-pressed="false">Топ 10</button>
-      <button class="chip" data-top="0" type="button" aria-pressed="false">Все</button>
       <span class="count" id="manCount"></span>
       <button id="dl" class="small" type="button">Скачать XLSX</button>
     </div>
@@ -603,7 +601,6 @@ const post = (url, body) => api(url, {
 let STAGES = {};
 let CURRENT_JOB = '';
 let LAST = null;
-let TOP = 5;
 
 async function loadStatus(){
   try{
@@ -1090,16 +1087,10 @@ function hay(m){
                  .join(' ').toLowerCase();
 }
 
-/* какие строки показать: сначала поиск, потом «Топ N» */
+/* какие строки показать: список целиком, а при поиске — совпавшие с ним */
 function visible(all){
   const q = FILTER.trim().toLowerCase();
-  const found = sorted(q ? all.filter(m => hay(m).includes(q)) : all);
-  if(!TOP || found.length <= TOP) return found;
-  const head = found.slice(0, TOP);
-  // объединённое вручную и отмеченное из «Топ N» не выкидываем: иначе строка
-  // пропадает сразу после объединения, стоит отсортировать по другой колонке
-  const kept = found.slice(TOP).filter(m => m.manual || PICKED.has(m.name));
-  return kept.length ? sorted(head.concat(kept)) : head;
+  return sorted(q ? all.filter(m => hay(m).includes(q)) : all);
 }
 
 function priceCell(m){
@@ -1165,8 +1156,8 @@ function renderProducers(){
   const q = FILTER.trim();
   $('#manCount').textContent = q
     ? 'найдено ' + list.length + ' из ' + all.length
-    : 'показано ' + list.length + ' из ' + all.length + ' ' +
-      plural(all.length, 'производителя', 'производителей', 'производителей');
+    : num(all.length) + ' ' +
+      plural(all.length, 'производитель', 'производителя', 'производителей');
   $('#mergeBar').classList.toggle('hidden', all.length < 2);
   if(!list.length){
     $('#tabMan').innerHTML = '<div class="hint">' +
@@ -1295,21 +1286,6 @@ $('#doSplit').onclick = async () => {
 };
 
 $('#manFind').oninput = () => { FILTER = $('#manFind').value || ''; renderProducers(); };
-
-$$('[data-top]').forEach(chip => {
-  chip.onclick = () => {
-    $$('[data-top]').forEach(c => {
-      c.classList.remove('on');
-      c.setAttribute('aria-pressed', 'false');
-    });
-    chip.classList.add('on');
-    chip.setAttribute('aria-pressed', 'true');
-    TOP = Number(chip.dataset.top);
-    renderProducers();
-    const box = $('#tabMan').closest('.scrollbox');
-    if(box) box.scrollTop = 0;      // список сменился — показываем его сверху
-  };
-});
 
 $('#dl').onclick = () => {
   if(!CURRENT_JOB) return;
