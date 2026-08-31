@@ -105,9 +105,23 @@ _COUNTRIES = (
 COUNTRY_TAIL_RE = re.compile(r"[,;]\s*(?:" + _COUNTRIES + r")\s*[.,]?$", re.I)
 
 
+# Название целиком в кавычках и без кавычек внутри: реестр так пишет
+# зарубежные заводы — «"КИРХНЕР & ВИЛЬГЕЛЬМ ГмбХ + Ко. КГ"». Кавычки при
+# имени завода ничего не значат, а в отчёте выглядят как опечатка.
+# У «ЗАО "ЗАВОД ЭМА"» кавычки внутри — их не трогаем.
+_WRAPPED = re.compile(r'^"([^"]+)"$|^«([^«»]+)»$')
+
+
+def unwrap_quotes(s: str) -> str:
+    m = _WRAPPED.match((s or "").strip())
+    return (m.group(1) or m.group(2)).strip() if m else s
+
+
 def clean_company(s: str) -> str:
 
-    s = " ".join((s or "").split())
+    # кавычки снимаем первыми: иначе они прикрывают хвост от чистки, и второй
+    # проход по тому же названию даёт другой ответ, чем первый
+    s = unwrap_quotes(" ".join((s or "").split()))
     for _ in range(3):
         before = s
         s = s.strip(' ,;.')
@@ -118,7 +132,7 @@ def clean_company(s: str) -> str:
             break
     if s.count('"') % 2:
         s = s + '"'
-    return s.strip(" ,;")
+    return unwrap_quotes(s.strip(" ,;"))
 
 
 def company_keys(name: str) -> set[str]:

@@ -243,6 +243,16 @@ def _value_text(value) -> str:
     return ""
 
 
+def _spec_name(name: str) -> str:
+    """Имя характеристики без завершающего двоеточия.
+
+    Заказчики часто пишут «Источник света:» — двоеточие ставит уже сама
+    программа, и в отчёте выходило «Источник света:: Галогенная».
+    """
+
+    return (name or "").rstrip(" \t:;")
+
+
 def parse_characteristics(product) -> list[tuple[str, str]]:
 
     out: list[tuple[str, str]] = []
@@ -252,7 +262,7 @@ def parse_characteristics(product) -> list[tuple[str, str]]:
             tag = etree.QName(ch).localname
             if not tag.startswith("characteristicsUsing"):
                 continue
-            name = _text(ch, "./{*}name")
+            name = _spec_name(_text(ch, "./{*}name"))
             if not name:
                 continue
             values = [_value_text(v) for v in ch.iter("{*}value")]
