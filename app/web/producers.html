@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Производители</title>
+<style>
+
+:root{
+  color-scheme:dark;
+  --bg:#0B0B0D; --surface:#141419; --raised:#1B1B21;
+  --line:rgba(255,255,255,.07); --edge:rgba(255,255,255,.14);
+  --ink:#F4F4F1; --dim:#9C9CA6; --faint:#8B8B96;
+  --lime:#CBF251; --lime-ink:#12160A; --lime-dim:rgba(203,242,81,.07);
+  --warn:#FFC46B; --err:#FF8E72; --r:14px;
+  --f-display:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  --f-text:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --f-small:"Segoe UI Variable Small","Segoe UI",system-ui,sans-serif;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#F1F1EC; --surface:#FFFFFF; --raised:#F6F6F1;
+  --line:rgba(0,0,0,.12); --edge:rgba(0,0,0,.24);
+  --ink:#15161A; --dim:#5A5B64; --faint:#6C6D76;
+  --lime:#4E6606; --lime-ink:#FFFFFF; --lime-dim:rgba(78,102,6,.08);
+  --warn:#8A5A05; --err:#A33417;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:400 15px/1.6 var(--f-text);-webkit-font-smoothing:antialiased}
+a{color:var(--lime)}
+a:hover{opacity:.82}
+.hidden{display:none !important}
+.page{max-width:1000px;margin:0 auto;padding:30px 28px 90px}
+.back{display:inline-block;color:var(--faint);font-size:13px;
+  text-decoration:none;margin-bottom:22px}
+.back:hover{color:var(--ink);opacity:1}
+h1{font:300 clamp(25px,3.2vw,36px)/1.12 var(--f-display);
+  letter-spacing:-.026em;margin:0 0 8px}
+.lede{color:var(--dim);font-size:14.5px;line-height:1.6;margin:0 0 24px;
+  max-width:72ch}
+
+button{font:600 14px/1 var(--f-text);border:1px solid var(--lime);
+  border-radius:11px;padding:12px 20px;cursor:pointer;color:var(--lime-ink);
+  background:var(--lime)}
+button.quiet{background:transparent;color:var(--ink);border-color:var(--edge)}
+button.small{padding:9px 15px;font-size:13px;border-radius:10px}
+button:hover{opacity:.86}
+button:disabled{opacity:.4;cursor:default}
+:where(input,button,a,[tabindex]):focus-visible{outline:2px solid var(--lime);
+  outline-offset:2px}
+input[type=text],input[type=search]{background:var(--raised);color:var(--ink);
+  border:1px solid var(--edge);border-radius:11px;padding:11px 14px;
+  font:400 14.5px/1.2 var(--f-text);width:100%}
+input::placeholder{color:var(--faint)}
+
+.bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:13px 15px;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--surface);position:sticky;top:0;z-index:5}
+.bar input{flex:0 1 260px;min-width:170px}
+.bar .grow{flex:1 1 auto}
+.bar .said{font-size:13px;color:var(--faint);text-align:right;
+  flex:1 1 160px;min-width:130px}
+.bar .said.bad{color:var(--err)}
+
+.count{color:var(--faint);font-size:13px;margin:16px 2px 10px}
+.grp{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);
+  padding:16px 18px;margin:0 0 10px;display:flex;gap:14px;align-items:flex-start}
+.grp.on{background:var(--lime-dim);border-color:var(--edge)}
+.grp input[type=checkbox]{width:16px;height:16px;margin-top:4px;flex:0 0 auto;
+  accent-color:var(--lime);cursor:pointer}
+.grp .body{flex:1;min-width:0}
+.grp .ttl{font-size:15.5px;font-weight:600;overflow-wrap:anywhere}
+.grp .sub{color:var(--faint);font-size:12.5px;margin-top:3px}
+.pills{margin-top:10px;display:flex;flex-wrap:wrap;gap:7px}
+.pill{display:inline-flex;align-items:center;gap:8px;background:var(--raised);
+  border:1px solid var(--line);border-radius:9px;padding:5px 6px 5px 11px;
+  font-size:12.5px;color:var(--dim);max-width:100%}
+.pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  max-width:42ch}
+.pill button{background:none;border:0;padding:0 5px;color:var(--faint);
+  font:400 15px/1 var(--f-text);cursor:pointer;border-radius:6px}
+.pill button:hover{color:var(--err);opacity:1}
+.add{margin-top:10px;background:none;border:0;padding:0;color:var(--lime);
+  font:400 13px/1.4 var(--f-text);cursor:pointer;border-radius:0}
+.add:hover{opacity:.8}
+.state{color:var(--dim);padding:30px 2px;max-width:70ch}
+.state b{color:var(--ink);display:block;margin-bottom:6px}
+
+.modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;
+  justify-content:center;padding:24px;background:rgba(0,0,0,.62)}
+:root[data-theme="light"] .modal{background:rgba(20,20,25,.42)}
+.modal .box{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);max-width:620px;width:100%;padding:26px 28px;
+  display:flex;flex-direction:column;gap:18px;max-height:calc(100vh - 48px)}
+.modal h2{font:400 22px/1.25 var(--f-display);letter-spacing:-.02em;margin:0}
+.modal .txt{color:var(--dim);font-size:14.5px;line-height:1.6;overflow:auto}
+.modal .txt p{margin:0 0 9px}
+.modal .txt b{color:var(--ink);font-weight:600}
+.modal .foot{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+
+@media (max-width:820px){ .page{padding:22px 16px 90px} }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <a class="back" href="/">← к поиску</a>
+  <h1>Производители</h1>
+  <p class="lede">Один и тот же завод в контрактах пишут по-разному. Здесь
+    собрано всё, что вы свели вручную: программа применяет эти объединения
+    в каждом прогоне — и в таблице производителей, и в колонке
+    «Производитель» отчёта. Уже сохранённые файлы не меняются.</p>
+
+  <div class="bar">
+    <input id="find" type="search" autocomplete="off"
+           placeholder="поиск по названию" aria-label="поиск производителя">
+    <button id="doMerge" class="quiet small" type="button" disabled>Объединить</button>
+    <button id="doRename" class="quiet small hidden" type="button">Переименовать</button>
+    <button id="doSplit" class="quiet small hidden" type="button">Разъединить</button>
+    <span class="said" id="said"></span>
+  </div>
+
+  <div class="count" id="count"></div>
+  <div id="list"><div class="state">Читаю список…</div></div>
+</div>
+
+<div class="modal hidden" id="dlg" role="dialog" aria-modal="true">
+  <div class="box">
+    <h2 id="dlgTitle"></h2>
+    <div class="txt" id="dlgBody"></div>
+    <div class="foot">
+      <button class="quiet" id="dlgNo" type="button">Отмена</button>
+      <button id="dlgYes" type="button">Хорошо</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => String(s ?? '').replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+try{
+  if(localStorage.getItem('theme') === 'light')
+    document.documentElement.dataset.theme = 'light';
+}catch(e){}
+
+function plural(n, one, few, many){
+  const m10 = n % 10, m100 = n % 100;
+  if(m10 === 1 && m100 !== 11) return one;
+  if(m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+
+async function api(url, opts){
+  const r = await fetch(url, opts);
+  let data = null;
+  try{ data = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error((data && data.detail) || ('Ошибка ' + r.status));
+  return data;
+}
+const post = (url, body) => api(url, {
+  method: 'POST', headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify(body),
+});
+
+/* ── диалог: Esc и щелчок мимо окна закрывают его ────────────────── */
+
+let dlgClose = null;
+
+function openDialog(title, bodyHtml, yesText){
+  $('#dlgTitle').textContent = title;
+  $('#dlgBody').innerHTML = bodyHtml;
+  $('#dlgYes').textContent = yesText;
+  $('#dlg').classList.remove('hidden');
+  return new Promise(resolve => {
+    dlgClose = value => {
+      $('#dlg').classList.add('hidden');
+      dlgClose = null;
+      resolve(value);
+    };
+  });
+}
+
+$('#dlg').onclick = e => { if(e.target === $('#dlg') && dlgClose) dlgClose(''); };
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && dlgClose) dlgClose('');
+});
+
+function ask(title, body, yes){
+  const done = openDialog(title, body, yes || 'Хорошо');
+  $('#dlgYes').onclick = () => dlgClose(true);
+  $('#dlgNo').onclick = () => dlgClose('');
+  return done;
+}
+
+function askText(title, body, value){
+  const done = openDialog(title,
+    body + '<input id="dlgInput" type="text" spellcheck="false">', 'Сохранить');
+  const input = $('#dlgInput');
+  input.value = value || '';
+  input.focus();
+  input.select();
+  input.onkeydown = e => { if(e.key === 'Enter') dlgClose(input.value.trim()); };
+  $('#dlgYes').onclick = () => dlgClose(input.value.trim());
+  $('#dlgNo').onclick = () => dlgClose('');
+  return done;
+}
+
+/* ── список ─────────────────────────────────────────────────────── */
+
+let GROUPS = [];            // [{title, names}] — как их хранит producers.json
+let PICKED = new Set();     // отмеченные группы: переживают поиск и перерисовку
+let FILTER = '';
+
+const groupOf = title => GROUPS.find(g => g.title === title);
+
+const picked = () => GROUPS.filter(g => PICKED.has(g.title));
+
+function visible(){
+  const q = FILTER.trim().toLowerCase();
+  if(!q) return GROUPS;
+  return GROUPS.filter(g =>
+    (g.title + ' ' + g.names.join(' ')).toLowerCase().includes(q));
+}
+
+function say(text, bad){
+  const el = $('#said');
+  el.textContent = text || '';
+  el.classList.toggle('bad', !!bad);
+}
+
+function row(g){
+  const pills = g.names.map(n =>
+    '<span class="pill"><span title="' + esc(n) + '">' + esc(n) + '</span>' +
+    '<button type="button" data-off="' + esc(n) + '" data-in="' + esc(g.title) +
+    '" title="убрать это написание из группы" aria-label="убрать написание">×</button>' +
+    '</span>').join('');
+  return '<div class="grp' + (PICKED.has(g.title) ? ' on' : '') + '">' +
+    '<input type="checkbox" value="' + esc(g.title) + '" aria-label="отметить группу"' +
+    (PICKED.has(g.title) ? ' checked' : '') + '>' +
+    '<div class="body">' +
+      '<div class="ttl">' + esc(g.title) + '</div>' +
+      '<div class="sub">' + g.names.length + ' ' +
+        plural(g.names.length, 'написание', 'написания', 'написаний') + '</div>' +
+      '<div class="pills">' + pills + '</div>' +
+      '<button class="add" type="button" data-add="' + esc(g.title) + '">' +
+        '+ добавить написание</button>' +
+    '</div></div>';
+}
+
+function render(){
+  const list = visible();
+  const spellings = GROUPS.reduce((n, g) => n + g.names.length, 0);
+  $('#count').textContent = GROUPS.length
+    ? (FILTER.trim() ? 'найдено ' + list.length + ' из ' + GROUPS.length :
+        GROUPS.length + ' ' + plural(GROUPS.length, 'группа', 'группы', 'групп') +
+        ' · ' + spellings + ' ' +
+        plural(spellings, 'написание', 'написания', 'написаний'))
+    : '';
+
+  if(!GROUPS.length){
+    $('#list').innerHTML = '<div class="state"><b>Пока ничего не объединено.</b>' +
+      'Объединять удобнее прямо в результатах прогона: там видно, сколько ' +
+      'у каждого написания контрактов и позиций, — отметьте строки одной фирмы ' +
+      'и нажмите «Объединить». Сведённое появится здесь и будет применяться ' +
+      'в каждом следующем прогоне.</div>';
+  } else if(!list.length){
+    $('#list').innerHTML = '<div class="state">По запросу «' + esc(FILTER.trim()) +
+      '» ничего нет.</div>';
+  } else {
+    $('#list').innerHTML = list.map(row).join('');
+  }
+
+  // список целиком не перерисовываем: у отмеченной строки меняется только
+  // фон, а перерисовка уводит фокус и сбивает прокрутку под рукой
+  $$('#list input[type=checkbox]').forEach(c => c.onchange = () => {
+    if(c.checked) PICKED.add(c.value); else PICKED.delete(c.value);
+    c.closest('.grp').classList.toggle('on', c.checked);
+    updateBar();
+  });
+  $$('#list button[data-off]').forEach(b => b.onclick = () =>
+    detach(b.dataset.in, b.dataset.off));
+  $$('#list button[data-add]').forEach(b => b.onclick = () => addName(b.dataset.add));
+  updateBar();
+}
+
+function updateBar(){
+  const p = picked();
+  $('#doMerge').disabled = p.length < 2;
+  $('#doMerge').textContent = p.length > 1
+    ? 'Объединить отмеченные (' + p.length + ')' : 'Объединить';
+  $('#doRename').classList.toggle('hidden', p.length !== 1);
+  $('#doSplit').classList.toggle('hidden', p.length !== 1);
+  // подсказка живёт там же, где ответ на действие: сказать после действия
+  // важнее, поэтому say() вызывают уже после перерисовки
+  say(!GROUPS.length ? ''
+    : p.length > 1 ? 'отмечено ' + p.length + ' — станут одной фирмой'
+    : p.length === 1 ? 'можно переименовать или разъединить'
+    : 'отметьте две группы и больше, чтобы объединить');
+}
+
+async function apply(url, body, said){
+  try{
+    const r = await post(url, body);
+    GROUPS = r.groups || [];
+    PICKED.clear();
+    render();
+    say(said);
+    return true;
+  }catch(e){
+    say(e.message, true);
+    return false;
+  }
+}
+
+/* ── действия ───────────────────────────────────────────────────── */
+
+$('#find').oninput = () => { FILTER = $('#find').value || ''; render(); };
+
+$('#doMerge').onclick = async () => {
+  const p = picked();
+  if(p.length < 2) return;
+  // название берём у самой полной группы: обычно она и складывалась дольше всех
+  const best = p.slice().sort((a, b) => b.names.length - a.names.length)[0].title;
+  const ok = await ask('Объединить группы?',
+    '<p>' + p.map(g => esc(g.title)).join('<br>') + '</p>' +
+    '<p>Станут одной фирмой с названием <b>' + esc(best) + '</b> — его можно ' +
+    'изменить кнопкой «Переименовать».</p>', 'Объединить');
+  if(!ok) return;
+  const names = p.reduce((all, g) => all.concat(g.names), []);
+  await apply('/api/producers/merge', {names, title: best}, 'Объединено: ' + best);
+};
+
+$('#doRename').onclick = async () => {
+  const g = picked()[0];
+  if(!g) return;
+  const value = await askText('Название фирмы',
+    '<p>Как называть эту фирму в списке, в сводке и в отчёте:</p>', g.title);
+  if(!value || value === g.title) return;
+  await apply('/api/producers/rename', {names: [g.title], title: value},
+              'Теперь это «' + value + '»');
+};
+
+$('#doSplit').onclick = async () => {
+  const g = picked()[0];
+  if(!g) return;
+  const ok = await ask('Разъединить?',
+    '<p>Написания снова станут сами по себе:</p><p>' +
+    g.names.map(esc).join('<br>') + '</p>', 'Разъединить');
+  if(!ok) return;
+  await apply('/api/producers/split', {names: g.names.concat([g.title])},
+              'Разъединено: ' + g.title);
+};
+
+/* Убрать одно написание. В группе меньше двух написаний смысла не имеет,
+   поэтому последняя пара разъединяется целиком — так и говорим. */
+async function detach(title, name){
+  const g = groupOf(title);
+  if(!g) return;
+  const last = g.names.length <= 2;
+  const ok = await ask('Убрать написание?',
+    '<p><b>' + esc(name) + '</b> перестанет относиться к «' + esc(title) + '».</p>' +
+    (last ? '<p>В группе останется одно написание, поэтому она разъединится ' +
+            'целиком.</p>' : ''), 'Убрать');
+  if(!ok) return;
+  await apply('/api/producers/split', {names: [name]}, 'Убрано: ' + name);
+}
+
+async function addName(title){
+  const g = groupOf(title);
+  if(!g) return;
+  const value = await askText('Ещё одно написание',
+    '<p>Как эта фирма написана в контрактах — так, чтобы программа отнесла ' +
+    'написание к «' + esc(title) + '»:</p>', '');
+  if(!value) return;
+  const was = g.names.length;
+  if(!await apply('/api/producers/merge',
+                  {names: [value].concat(g.names), title: title},
+                  'Добавлено: ' + value)) return;
+  // написание, которое отличается только кавычками, регистром или «ООО»,
+  // программа и так сводит сама — списку от него ничего не прибавится
+  const now = groupOf(title);
+  if(now && now.names.length === was)
+    say('«' + value + '» программа и так относит сюда — в списке ничего не изменилось');
+}
+
+/* ── старт ──────────────────────────────────────────────────────── */
+
+(async () => {
+  try{
+    GROUPS = (await api('/api/producers')).groups || [];
+    render();
+  }catch(e){
+    $('#list').innerHTML = '<div class="state"><b>Список не открылся.</b>' +
+      esc(e.message) + '</div>';
+  }
+})();
+
+/* пока открыта эта страница, программа не должна закрываться */
+const alive = () => fetch('/api/alive', {method: 'POST'}).catch(() => {});
+alive();
+setInterval(alive, 10000);
+document.addEventListener('visibilitychange', () => { if(!document.hidden) alive(); });
+window.addEventListener('pagehide', () => navigator.sendBeacon('/api/bye'));
+</script>
+</body>
+</html>

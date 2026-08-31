@@ -890,6 +890,63 @@ async def rzn_page(number: str) -> str:
     return (WEB / "rzn.html").read_text(encoding="utf-8")
 
 
+# ── общий справочник производителей ──────────────────────────────────
+# Объединения живут в data/producers.json и применяются в каждом прогоне,
+# а править их можно было только в таблице свежего результата — то есть
+# после получаса поиска. Эта страница открывает тот же список отдельно.
+
+
+class ProducerRequest(BaseModel):
+    names: list[str] = Field(default_factory=list)
+    title: str = ""
+
+
+def _manual_groups() -> list[dict]:
+
+    return [{"title": title, "names": sorted(names, key=str.lower)}
+            for title, names in sorted(groups.load().items(),
+                                       key=lambda kv: kv[0].lower())]
+
+
+@app.get("/producers", response_class=HTMLResponse)
+async def producers_page() -> str:
+    return (WEB / "producers.html").read_text(encoding="utf-8")
+
+
+@app.get("/api/producers")
+async def producers_list() -> dict:
+    return {"groups": _manual_groups()}
+
+
+@app.post("/api/producers/merge")
+async def producers_merge(req: ProducerRequest) -> dict:
+
+    if len(req.names) < 2:
+        raise HTTPException(400, "Нужно хотя бы два написания.")
+    title = groups.merge(req.names, req.title)
+    return {"title": title, "groups": _manual_groups()}
+
+
+@app.post("/api/producers/split")
+async def producers_split(req: ProducerRequest) -> dict:
+
+    if not req.names:
+        raise HTTPException(400, "Не указано, что разъединять.")
+    groups.split(req.names)
+    return {"groups": _manual_groups()}
+
+
+@app.post("/api/producers/rename")
+async def producers_rename(req: ProducerRequest) -> dict:
+
+    if not req.title.strip():
+        raise HTTPException(400, "Название не может быть пустым.")
+    if not req.names:
+        raise HTTPException(400, "Не указано, какую группу переименовать.")
+    groups.rename(req.names[0], req.title)
+    return {"groups": _manual_groups()}
+
+
 class CacheClearRequest(BaseModel):
     areas: list[str] = Field(default_factory=list)
 

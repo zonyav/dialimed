@@ -72,6 +72,14 @@ header b{font:600 14px/1 var(--f-small);white-space:nowrap;flex:0 0 auto}
 header .ctx{color:var(--faint);font-size:13px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;max-width:40ch;min-width:0;flex:0 1 auto}
 header .sp{flex:1 1 0;min-width:8px}
+/* в узком окне ужимаются подписи, а не кнопки: перенос слов внутри
+   кнопки выглядит поломкой */
+header button{flex:0 0 auto;white-space:nowrap}
+/* ссылка в шапке выглядит как тихая кнопка рядом с ней */
+header .lnk{color:var(--dim);font:600 13px/1 var(--f-text);text-decoration:none;
+  border:1px solid var(--edge);border-radius:10px;padding:9px 15px;
+  white-space:nowrap;flex:0 0 auto}
+header .lnk:hover{color:var(--ink);opacity:1}
 header .st{color:var(--faint);font-size:13px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
@@ -325,6 +333,7 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
   <span class="st" id="ver"></span>
   <span class="st" id="status" role="status" aria-live="polite"
         title="состояние реестра Росздравнадзора">проверяю, отвечает ли реестр…</span>
+  <a class="lnk" href="/producers">Производители</a>
   <button id="th" class="quiet small" type="button">Светлая тема</button>
 </header>
 
@@ -434,7 +443,8 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
     <div class="hint" style="margin-top:10px">Один и тот же завод в контрактах
       пишут по-разному. Отметьте строки, которые относятся к одной фирме,
       и нажмите «Объединить» — программа запомнит это и будет сводить их
-      в следующих прогонах.</div>
+      в следующих прогонах. Всё сведённое лежит на странице
+      <a href="/producers">Производители</a>: там это можно поправить и без прогона.</div>
   </div>
 
   <div class="panel hidden" id="histPanel">

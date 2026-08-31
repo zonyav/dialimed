@@ -599,6 +599,19 @@ try:
           len(_groups.load().get("ООО «Диксион»", [])), 3)
     _groups.split(["DIXION", "Диксион", "Dixion Group"])
     check("разъединение очистило список", _groups.load(), {})
+
+    # на странице «Производители» объединяют не написания, а целые группы:
+    # передаются все их написания, и вторая группа должна исчезнуть
+    _groups.merge(["Диксион", "DIXION"], "Диксион")
+    _groups.merge(["Завод ЭМА", "EMA Plant"], "Завод ЭМА")
+    _groups.merge(["Диксион", "DIXION", "Завод ЭМА", "EMA Plant"], "Диксион")
+    check("объединение групп не оставляет вторую", len(_groups.load()), 1)
+    check("написания собрались вместе",
+          len(_groups.load().get("Диксион", [])), 4)
+    _groups.split(["EMA Plant"])
+    check("одно написание открепилось",
+          len(_groups.load().get("Диксион", [])), 3)
+    _groups.FILE.unlink(missing_ok=True)
 finally:
     _groups.FILE.unlink(missing_ok=True)
     _groups.FILE = _was
