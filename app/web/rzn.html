@@ -8,35 +8,39 @@
 
 :root{
   color-scheme:dark;
-  --bg:#0B0B0D; --surface:#141419; --raised:#1A1A21;
-  --line:rgba(255,255,255,.06);
+  --bg:#0B0B0D; --surface:#141419;
+  --line:rgba(255,255,255,.07); --edge:rgba(255,255,255,.14);
   --ink:#F4F4F1; --dim:#9C9CA6; --faint:#8B8B96;
   --lime:#CBF251; --lime-ink:#12160A;
-  --warn:#FFC46B; --err:#FF8A7A; --r:14px;
+  --warn:#FFC46B; --r:14px;
   --f-display:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
   --f-text:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
   --f-small:"Segoe UI Variable Small","Segoe UI",system-ui,sans-serif;
 }
-[data-theme="light"]{
+:root[data-theme="light"]{
   color-scheme:light;
-  --bg:#F0F0EA; --surface:#FFFFFF; --raised:#E9E9E1;
-  --line:rgba(0,0,0,.14);
-  --ink:#15161A; --dim:#5E5F68; --faint:#686971;
-  --lime:#516A08; --lime-ink:#FFFFFF; --warn:#8A5A05; --err:#A93B2C;
+  --bg:#F1F1EC; --surface:#FFFFFF;
+  --line:rgba(0,0,0,.12); --edge:rgba(0,0,0,.24);
+  --ink:#15161A; --dim:#5A5B64; --faint:#6C6D76;
+  --lime:#4E6606; --lime-ink:#FFFFFF; --warn:#8A5A05;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
   font:400 15px/1.6 var(--f-text);-webkit-font-smoothing:antialiased}
-.page{max-width:920px;margin:0 auto;padding:38px 28px 80px}
 a{color:var(--lime)}
-h1{font:300 clamp(26px,3.4vw,38px)/1.1 var(--f-display);
+a:hover{opacity:.82}
+.page{max-width:920px;margin:0 auto;padding:30px 28px 80px}
+.back{display:inline-block;color:var(--faint);font-size:13px;
+  text-decoration:none;margin-bottom:22px}
+.back:hover{color:var(--ink);opacity:1}
+h1{font:300 clamp(25px,3.2vw,36px)/1.12 var(--f-display);
   letter-spacing:-.026em;margin:0 0 6px}
 .num{color:var(--dim);font-size:15px;margin:0 0 26px;
   font-variant-numeric:tabular-nums}
 .panel{background:var(--surface);border:1px solid var(--line);
   border-radius:var(--r);padding:22px 24px;margin:0 0 14px}
 .f{display:grid;grid-template-columns:210px 1fr;gap:12px 22px;
-  align-items:baseline}
+  align-items:baseline;margin:0}
 .f dt{color:var(--faint);font:600 11px/1.5 var(--f-small);
   letter-spacing:.1em;text-transform:uppercase;margin:0}
 .f dd{margin:0;overflow-wrap:anywhere}
@@ -50,8 +54,11 @@ h1{font:300 clamp(26px,3.4vw,38px)/1.1 var(--f-display);
 button,.btn{font:600 14px/1 var(--f-text);border:1px solid var(--lime);
   border-radius:11px;padding:12px 20px;cursor:pointer;color:var(--lime-ink);
   background:var(--lime);text-decoration:none;display:inline-block}
-.btn.quiet{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn.quiet,button.quiet{background:transparent;color:var(--ink);
+  border-color:var(--edge)}
 button:hover,.btn:hover{opacity:.86}
+:where(button,a,[tabindex]):focus-visible{outline:2px solid var(--lime);
+  outline-offset:2px}
 .hint{color:var(--faint);font-size:12.5px;line-height:1.5;max-width:64ch}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:999px;
   padding:3px 11px;font-size:12.5px;color:var(--dim);margin-left:10px;
@@ -62,44 +69,47 @@ button:hover,.btn:hover{opacity:.86}
 </head>
 <body>
 <div class="page">
+  <a class="back" href="/">← к поиску</a>
   <h1 id="title">Регистрационное удостоверение</h1>
   <p class="num" id="num"></p>
   <div id="body"><div class="state">Спрашиваю реестр Росздравнадзора…</div></div>
   <div class="foot">
     <a class="btn quiet" id="open" href="https://elk.roszdravnadzor.gov.ru/widget/"
        target="_blank" rel="noopener">Открыть реестр Росздравнадзора</a>
-    <button class="btn quiet" id="copy" type="button">Скопировать номер</button>
+    <button class="quiet" id="copy" type="button">Скопировать номер</button>
   </div>
   <p class="hint" style="margin-top:14px">Реестр не даёт прямых ссылок на запись:
     номер в нём вводят руками, в поле «Регистрационный номер медицинского
     изделия». Кнопка выше откроет реестр, номер уже будет в буфере обмена.</p>
 </div>
 <script>
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = s => String(s ?? '').replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 try{
   if(localStorage.getItem('theme') === 'light')
     document.documentElement.dataset.theme = 'light';
 }catch(e){}
 
 const number = decodeURIComponent(location.pathname.replace(/^\/rzn\//, ''));
-
 const bare = number.replace(/^ЕРУЛ\s*/i, '');
 document.getElementById('num').textContent = number;
+
 function copyNumber(done){
   navigator.clipboard.writeText(bare).then(
     () => { if(done) done(true); },
     () => { if(done) done(false); });
 }
-document.getElementById('copy').onclick = () => copyNumber(ok => {
-  document.getElementById('copy').textContent = ok ? 'Номер скопирован'
-                                                   : 'Скопировать не вышло';
-});
 
+const copyBtn = document.getElementById('copy');
+copyBtn.onclick = () => copyNumber(ok => {
+  copyBtn.textContent = ok ? 'Номер скопирован' : 'Скопировать не вышло';
+  // кнопка возвращает своё название: иначе непонятно, можно ли нажать ещё раз
+  setTimeout(() => { copyBtn.textContent = 'Скопировать номер'; }, 2500);
+});
 document.getElementById('open').addEventListener('click', () => copyNumber());
 
-function row(k, v, cls){
-  return `<dt>${esc(k)}</dt><dd class="${cls || (v ? '' : 'none')}">${v ? esc(v) : '—'}</dd>`;
-}
+const row = (k, v, cls) =>
+  `<dt>${esc(k)}</dt><dd class="${cls || (v ? '' : 'none')}">${v ? esc(v) : '—'}</dd>`;
 
 const rusDate = s => /^\d{4}-\d{2}-\d{2}/.test(s || '')
   ? s.slice(0, 10).split('-').reverse().join('.') : (s || '');
@@ -109,10 +119,11 @@ const rusDate = s => /^\d{4}-\d{2}-\d{2}/.test(s || '')
   let d;
   try{
     const r = await fetch('/api/rzn/' + encodeURIComponent(number));
-    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail || r.statusText);
+    if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
     d = await r.json();
   }catch(e){
-    box.innerHTML = `<div class="note"><b>Спросить реестр не удалось.</b>${esc(e.message || e)}</div>`;
+    box.innerHTML = '<div class="note"><b>Спросить реестр не удалось.</b>' +
+                    esc(e.message || e) + '</div>';
     return;
   }
   if(!d.found){
@@ -123,8 +134,10 @@ const rusDate = s => /^\d{4}-\d{2}-\d{2}/.test(s || '')
     return;
   }
   const st = /истек|аннул|прекра/i.test(d.status || '') ? 'old' : 'ok';
-  document.getElementById('title').innerHTML = esc(d.name || 'Регистрационное удостоверение') +
+  document.getElementById('title').innerHTML =
+    esc(d.name || 'Регистрационное удостоверение') +
     (d.status ? `<span class="tag ${st}">${esc(d.status)}</span>` : '');
+  const variants = (d.variants && d.variants.length) ? d.variants.join('; ') : d.models;
   box.innerHTML = '<div class="panel"><dl class="f">' +
     row('Номер РУ', d.number) +
     row('Дата регистрации', rusDate(d.date)) +
@@ -135,18 +148,16 @@ const rusDate = s => /^\d{4}-\d{2}-\d{2}/.test(s || '')
     row('ИНН держателя', d.inn) +
     row('Номер ЕРУЛ', d.erul) +
     '</dl></div>' +
-    ((d.variants && d.variants.length) || d.models
-      ? '<div class="panel"><dl class="f">' +
-        row('Варианты исполнения',
-            (d.variants || []).join('; ') || d.models) +
-        '</dl></div>' : '');
+    (variants ? '<div class="panel"><dl class="f">' +
+                row('Варианты исполнения', variants) + '</dl></div>' : '');
 })();
 
-  /* пока открыта эта страница, программа не должна закрываться */
-  const alive = () => fetch('/api/alive', {method: 'POST'}).catch(() => {});
-  alive();
-  setInterval(alive, 10000);
-  window.addEventListener('pagehide', () => navigator.sendBeacon('/api/bye'));
+/* пока открыта эта страница, программа не должна закрываться */
+const alive = () => fetch('/api/alive', {method: 'POST'}).catch(() => {});
+alive();
+setInterval(alive, 10000);
+document.addEventListener('visibilitychange', () => { if(!document.hidden) alive(); });
+window.addEventListener('pagehide', () => navigator.sendBeacon('/api/bye'));
 </script>
 </body>
 </html>
