@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
 from . import timing
-from .config import settings, DEFAULT_STAGES
+from .config import settings, DEFAULT_STAGES, STAGES
 from .eis.client import TOTALS as EIS_TOTALS, EisClient
 from .eis.documents import (fetch_contract_xml, fetch_print_form,
                             is_amended)
@@ -44,6 +44,18 @@ class SearchParams:
     date_to: str = ""
     stages: list[str] = field(default_factory=lambda: list(DEFAULT_STAGES))
     limit_per_ktru: int = 0
+
+
+def describe(params: SearchParams) -> str:
+    """Одной строкой: что искали. Подпись прогона в отчёте и в списке.
+
+    Строка попадает и в CLI, и в веб — держим её в одном месте, иначе
+    два списка отчётов начинают выглядеть по-разному.
+    """
+
+    return (f"КТРУ: {', '.join(params.ktru) or '—'}; период с {params.date_from}"
+            f"{' по ' + params.date_to if params.date_to else ''}; "
+            f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}")
 
 
 async def run_online(params: SearchParams, progress: Progress = _noop) -> RunResult:
@@ -272,10 +284,8 @@ def _parse_names(rows: list[Row]) -> None:
         src = p.ru_name or p.name
         parts = parse_name(src, hints)
 
-        if parts.ru_numbers:
-            p.ru_numbers_all = "; ".join(parts.ru_numbers)
-            if not p.ru_number:
-                p.ru_number = pick_main_ru(src, parts.ru_numbers, hints)
+        if parts.ru_numbers and not p.ru_number:
+            p.ru_number = pick_main_ru(src, parts.ru_numbers, hints)
         p.tu_number = parts.tu_number or extract_tu(p.name) or extract_tu(p.trademark)
         if parts.erul and not p.erul:
             p.erul = parts.erul
@@ -288,8 +298,6 @@ def _parse_names(rows: list[Row]) -> None:
             p.mark = got or (p.trademark
                              if looks_like_mark(p.trademark, type_hints=hints) else "")
             p.mark_source = "товарный знак" if p.mark else ""
-        p.raw_medical_block = " | ".join(
-            x for x in (p.name, p.ru_name, p.trademark) if x)
 
 
 async def _enrich(rows: list[Row], params: SearchParams, result: RunResult,
@@ -807,56 +815,6 @@ def _merge_company_groups(variants: dict[tuple[str, str], "Counter"]) -> dict[tu
     return canon
 
 
-def other_registration(ru_of_mark: dict, src: str, dst: str) -> bool:
-
-    a, b = ru_of_mark.get(src) or set(), ru_of_mark.get(dst) or set()
-    return bool(a and b and not (a & b))
-
-
-def _apply_company_map(rows: list[Row], comp_map: dict[str, str]) -> None:
-    for r in rows:
-        for field in ("manufacturer", "declarant"):
-            val = getattr(r.pos, field)
-            if val and val in comp_map:
-                setattr(r.pos, field, comp_map[val])
-
-
-def _merge_by_common_mark(rows: list[Row], result: RunResult) -> None:
-
-    from collections import Counter, defaultdict
-
-    from .enrich.verify import phonetic_close
-
-    marks: dict[str, set[str]] = defaultdict(set)
-    counts: Counter = Counter()
-    for r in rows:
-        m = r.pos.manufacturer
-        if not m:
-            continue
-        counts[m] += 1
-        if r.pos.mark:
-            marks[m].add(_mark_key(r.pos.mark))
-
-    names = sorted(counts, key=lambda n: -counts[n])
-    canon: dict[str, str] = {}
-    for i, a in enumerate(names):
-        if a in canon:
-            continue
-        for b in names[i + 1:]:
-            if b in canon:
-                continue
-            if company_key(a)[1] != company_key(b)[1]:
-                continue
-            if not (marks[a] & marks[b]):
-                continue
-            if phonetic_close(a, b):
-                canon[b] = a
-    if not canon:
-        return
-    _apply_company_map(rows, canon)
-    result.stats["сведено по общей марке"] = len(canon)
-
-
 def _mark_keys(mark: str, hints: Iterable[str] = ()) -> list[str]:
 
     out: list[str] = []
@@ -1037,7 +995,6 @@ async def _enrich_from_kind(rows: list[Row], rzn: RznEnricher,
             m = match_rules(idx, p.mark, p.trademark, p.ru_name)
             if m.ok:
                 _apply_registry(p, m.record, source="реестр РЗН (по виду)")
-                p.kind_evidence = "совпало: " + ", ".join(m.tokens[:6])
                 stats["совпало по правилам"] += 1
 
     result.stats["срез по виду"] = stats

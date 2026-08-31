@@ -1,3 +1,11 @@
+"""Сбор данных о поставках медизделий из контрактов ЕИС (44-ФЗ).
+
+Примеры:
+  python run.py 32.50.11.000-00000080 --from 01.01.2025
+  python run.py 191220 --to 30.06.2026 --limit 50
+  python run.py --file codes.txt --stages 0,1
+  python run.py --web
+"""
 
 from __future__ import annotations
 
@@ -50,8 +58,8 @@ if not getattr(sys, "frozen", False):
 from app.config import settings, STAGES, DEFAULT_STAGES
 from app.eis.search import parse_ktru_list
 from app.enrich.nkmi import parse_nkmi_list
-from app.pipeline import SearchParams, run_online
-from app.report.excel import save_report
+from app.pipeline import SearchParams, describe, run_online
+from app.report.excel import report_name, save_report
 
 
 async def expand_kinds(kinds: list[str], *, date_from: str, date_to: str,
@@ -77,6 +85,62 @@ async def expand_kinds(kinds: list[str], *, date_from: str, date_to: str,
                 notes.append(f"НКМИ {br.code} ({br.name}): "
                              f"{br.note or 'подходящих позиций каталога нет'}")
     return codes, notes
+
+
+def _free_port(first: int, tries: int = 20) -> int:
+    """Свободный порт начиная с заданного.
+
+    Порты 8123+ на некоторых машинах зарезервированы Windows, поэтому
+    просматриваем два десятка подряд, а потом просим любой свободный.
+    """
+
+    import socket
+
+    for candidate in range(first, first + tries):
+        with socket.socket() as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", candidate))
+                return candidate
+            except OSError:
+                continue
+    with socket.socket() as s:
+        try:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+        except OSError:
+            return 0
+
+
+def serve(port: int, open_browser: bool) -> int:
+    """Веб-интерфейс на локальном адресе."""
+
+    import uvicorn
+
+    chosen = _free_port(port)
+    if not chosen:
+        print(f"  Порты {port}–{port + 19} заняты, свободный тоже не нашёлся.")
+        print("  Укажите свой: --port 9000")
+        return 2
+    if chosen != port:
+        print(f"  Порт {port} занят, беру {chosen}")
+    url = f"http://127.0.0.1:{chosen}"
+    print(f"\n  Веб-интерфейс: {url}\n  Ctrl+C — остановить\n")
+    if open_browser:
+        import threading
+        import webbrowser
+
+        def _open() -> None:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+
+        threading.Timer(1.5, _open).start()
+    from app.api import app as web_app
+
+    uvicorn.run(web_app, host="127.0.0.1", port=chosen, log_level="warning")
+    return 0
 
 
 class Bar:
@@ -138,47 +202,7 @@ def main() -> int:
 
     if args.web or (getattr(sys, "frozen", False) and not args.ktru
                     and not args.file and not args.compact_cache):
-        import socket
-        import uvicorn
-
-        port = args.port
-        for candidate in range(args.port, args.port + 20):
-            with socket.socket() as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                try:
-                    s.bind(("127.0.0.1", candidate))
-                    port = candidate
-                    break
-                except OSError:
-                    continue
-        else:
-            with socket.socket() as s:
-                try:
-                    s.bind(("127.0.0.1", 0))
-                    port = s.getsockname()[1]
-                except OSError:
-                    print(f"  Порты {args.port}–{args.port + 19} заняты, "
-                          f"свободный тоже не нашёлся. Укажите свой: --port 9000")
-                    return 2
-        if port != args.port:
-            print(f"  Порт {args.port} занят, беру {port}")
-        url = f"http://127.0.0.1:{port}"
-        print(f"\n  Веб-интерфейс: {url}\n  Ctrl+C — остановить\n")
-        if not args.no_browser:
-            import threading
-            import webbrowser
-
-            def _open() -> None:
-                try:
-                    webbrowser.open(url)
-                except Exception:
-                    pass
-
-            threading.Timer(1.5, _open).start()
-        from app.api import app as web_app
-
-        uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")
-        return 0
+        return serve(args.port, not args.no_browser)
 
     if args.no_cache:
         settings.cache_enabled = False
@@ -239,13 +263,8 @@ def main() -> int:
             print(f"    - [{p.stage}] {p.ref}: {p.message}")
         return 1
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M")
-    tag = codes[0].replace(".", "_")
-    out = Path(args.out) if args.out else settings.out_dir / f"медизделия_{tag}_{stamp}.xlsx"
-    note = (f"КТРУ: {', '.join(codes) or '—'}; период с {params.date_from}"
-            f"{' по ' + params.date_to if params.date_to else ''}; "
-            f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}")
-    save_report(result, out, note)
+    out = Path(args.out) if args.out else settings.out_dir / report_name(codes)
+    save_report(result, out, describe(params))
 
     from app import maintenance
 

@@ -28,8 +28,8 @@ from .eis.search import parse_ktru_list
 from .enrich.nameparse import ERUL_RE
 from .enrich.rzn import RznEnricher
 from .models import Problem, RunResult
-from .pipeline import SearchParams, run_online
-from .report.excel import save_report
+from .pipeline import SearchParams, describe, run_online
+from .report.excel import report_name, save_report
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +97,17 @@ class Job:
 JOBS: dict[str, Job] = {}
 RUN_LOCK = asyncio.Lock()
 CURRENT: Optional[str] = None
+
+# Фоновые задачи держим за руку: asyncio ссылается на них слабо и может
+# снять незавершённую задачу сборкой мусора.
+_SIDE_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _SIDE_TASKS.add(task)
+    task.add_done_callback(_SIDE_TASKS.discard)
+    return task
 
 # Программа живёт, пока открыта её страница. Отсчитывать молчание нельзя:
 # браузер замораживает таймеры в фоновой вкладке, и программа умирала, пока
@@ -179,7 +190,7 @@ async def alive() -> dict:
     _last_ping = time.monotonic()
     _closing_at = None
     if _watchdog is None or _watchdog.done():
-        _watchdog = asyncio.create_task(_watch_page())
+        _watchdog = _spawn(_watch_page())
     return {"ok": True}
 
 
@@ -196,7 +207,7 @@ async def bye() -> dict:
 async def quit_now() -> dict:
 
     log.info("выход по кнопке в интерфейсе")
-    asyncio.create_task(_shutdown(0.4))
+    _spawn(_shutdown(0.4))
     return {"ok": True}
 
 
@@ -333,11 +344,7 @@ async def start(req: RunRequest) -> dict:
         stages=req.stages or list(DEFAULT_STAGES),
         limit_per_ktru=max(0, req.limit_per_ktru),
     )
-    note = (f"КТРУ: {', '.join(codes) or '—'}; период с {params.date_from}"
-            f"{' по ' + params.date_to if params.date_to else ''}; "
-            f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}")
-
-    job = Job(id=uuid.uuid4().hex[:12], params=params, note=note)
+    job = Job(id=uuid.uuid4().hex[:12], params=params, note=describe(params))
     JOBS[job.id] = job
     _forget_old_jobs()
     CURRENT = job.id
@@ -386,9 +393,7 @@ async def _run(job: Job) -> None:
             job.result = res
 
             if res.rows:
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                tag = (job.params.ktru[0].replace(".", "_") if job.params.ktru else "папка")
-                job.file = settings.out_dir / f"медизделия_{tag}_{stamp}.xlsx"
+                job.file = settings.out_dir / report_name(job.params.ktru)
                 await job.save()
                 _index_add(job)
 
@@ -408,7 +413,7 @@ async def _run(job: Job) -> None:
                 CURRENT = None
             job.emit("eof")
             _forget_old_jobs()
-            asyncio.create_task(_tidy_cache())
+            _spawn(_tidy_cache())
 
 
 def _done_payload(job: Job, res: RunResult) -> dict:

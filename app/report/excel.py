@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -74,6 +75,12 @@ def build_workbook(result: RunResult, params_note: str = "") -> Workbook:
     # где её можно листать, сортировать и объединять производителей
     wb = Workbook()
     _sheet_positions(wb.active, result)
+    # запрос виден в свойствах файла: через месяц по имени отчёта
+    # уже не вспомнить, какие коды и период в нём лежат
+    wb.properties.title = "Медизделия в контрактах ЕИС"
+    wb.properties.creator = "Поиск медизделия"
+    if params_note:
+        wb.properties.description = params_note
     return wb
 
 
@@ -142,6 +149,13 @@ def _sheet_positions(ws: Worksheet, result: RunResult) -> None:
         ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{n + 1}"
     ws.freeze_panes = "A2"
     ws.sheet_view.showGridLines = False
+
+
+def report_name(codes: list[str]) -> str:
+    """Имя файла отчёта: код первой позиции и время прогона."""
+
+    tag = codes[0].replace(".", "_") if codes else "папка"
+    return f"медизделия_{tag}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
 
 
 def save_report(result: RunResult, path: str | Path, params_note: str = "") -> Path:
