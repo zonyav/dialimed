@@ -833,6 +833,70 @@ check("руководство по эксплуатации — не модел�
       variants_from_registry("Руководство по эксплуатации 1 экз"), [])
 
 
+print("\n обновление программы")
+
+import asyncio
+import hashlib
+import tempfile
+
+from app import update as upd
+
+check("новая версия видна", upd._newer("v1.0.5", "1.0.4"), True)
+check("своя версия не новее", upd._newer("v1.0.4", "1.0.4"), False)
+
+_assets = [
+    {"name": "Medizdeliya-1.0.5.exe", "size": 21_000_000,
+     "browser_download_url":
+         "https://github.com/o/r/releases/download/v1.0.5/Medizdeliya-1.0.5.exe"},
+    {"name": "Medizdeliya-1.0.5.exe", "size": 99_000_000,
+     "browser_download_url": "https://example.com/podmena.exe"},
+    {"name": "notes.txt", "size": 900,
+     "browser_download_url": "https://github.com/o/r/releases/download/v1.0.5/notes.txt"},
+]
+check("файл берут только с github", upd._pick_asset(_assets).get("size"), 21_000_000)
+check("посторонних адресов нет", upd._pick_asset(_assets[1:2]), {})
+
+
+def _swap_run(*, digest_ok: bool) -> tuple[bytes, bool, dict]:
+    """Обновление в песочнице: настоящей загрузки нет, подмена настоящая."""
+
+    body = b"MZ" + b"\x01" * upd.MIN_SIZE
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = pathlib.Path(tmp) / "Medizdeliya.exe"
+        exe.write_bytes(b"MZ" + b"\x00" * upd.MIN_SIZE)
+        digest = hashlib.sha256(body).hexdigest()
+        was = (upd.exe_path, upd.check, upd._asset, upd._installed)
+        upd.exe_path = lambda: exe
+        upd.check = lambda: asyncio.sleep(0, {"new": True, "latest": "1.0.5"})
+        upd._asset = {"url": "https://github.com/o/r/releases/download/v1.0.5/x.exe",
+                      "size": len(body),
+                      "digest": "sha256:" + (digest if digest_ok else "0" * 64)}
+        upd._installed = ""
+
+        async def _fake(url, target):
+            target.write_bytes(body)
+            return hashlib.sha256(body).hexdigest(), len(body), body[:2]
+
+        upd._download = _fake
+        try:
+            answer = asyncio.run(upd.install())
+            left = list(exe.parent.glob("*.exe.old*"))
+            upd.sweep()
+            return exe.read_bytes(), bool(left), answer
+        finally:
+            upd.exe_path, upd.check, upd._asset, upd._installed = was
+
+
+_body, _kept, _answer = _swap_run(digest_ok=True)
+check("новый файл встал на место старого", _body[:3], b"MZ\x01")
+check("прежняя версия отложена и убрана", _kept, True)
+check("обновление отчиталось", _answer.get("ok"), True)
+
+_body, _kept, _answer = _swap_run(digest_ok=False)
+check("сумма не сошлась — файл не тронут", _body[:3], b"MZ\x00")
+check("сумма не сошлась — сказано об этом", _answer.get("ok"), False)
+
+
 section("3. Разбор наименования — примеры пользователя")
 
 from app.enrich.nameparse import (extract_ru_numbers, parse_name,

@@ -621,12 +621,50 @@ function showUpdate(u){
   if(!u) return;
   $('#ver').textContent = 'версия ' + (u.version || '');
   if(!u.new || !u.url) return;
+  const link = '<a href="' + esc(u.url) + '" target="_blank" rel="noopener">' +
+    'Страница загрузки</a>';
+  // обычно программа заменяет свой файл сама; вручную — только если папка
+  // с программой закрыта на запись (например, Program Files)
   $('#alerts').innerHTML =
     '<div class="note"><b>Вышла новая версия ' + esc(u.latest) + '</b>' +
-    'У вас ' + esc(u.version) + '. Скачайте новый файл и замените им старый — ' +
-    'папки data и out трогать не нужно. ' +
-    '<a href="' + esc(u.url) + '" target="_blank" rel="noopener">Страница загрузки</a>' +
-    '</div>';
+    'У вас ' + esc(u.version) + '. ' + (u.can_install
+      ? 'Программа сама заменит свой файл новым — папки data и out ' +
+        'останутся на месте.' +
+        '<div class="stack" style="margin-top:10px">' +
+        '<button id="doUpdate" class="small" type="button">Обновить</button>' +
+        '<span class="hint" id="updNote">' + link + '</span></div>'
+      : 'Скачайте новый файл и замените им старый — папки data и out ' +
+        'трогать не нужно. ' + link) + '</div>';
+  const btn = $('#doUpdate');
+  if(btn) btn.onclick = () => installUpdate(u, link);
+}
+
+async function installUpdate(u, link){
+  const btn = $('#doUpdate');
+  btn.disabled = true;
+  $('#updNote').textContent = 'скачиваю новую версию, это займёт минуту…';
+  let r;
+  try{
+    r = await api('/api/update/install', {method: 'POST'});
+  }catch(e){
+    r = {ok: false, error: e.message};
+  }
+  if(!r || !r.ok){
+    // не вышло — остаётся прежний способ, поэтому ссылка снова рядом
+    btn.disabled = false;
+    $('#updNote').innerHTML =
+      esc((r && r.error) || 'не получилось обновиться') + ' ' + link;
+    return;
+  }
+  // подменён файл, а не работающая программа: новая версия появится
+  // при следующем запуске — тем же ярлыком, ничего никуда не перенося
+  $('#alerts').innerHTML =
+    '<div class="note ok"><b>Версия ' + esc(r.version) + ' установлена</b>' +
+    'Закройте программу и запустите её снова — тем же ярлыком, файл уже новый.' +
+    '<div class="stack" style="margin-top:10px">' +
+    '<button id="doBye" class="small" type="button">Закрыть программу</button>' +
+    '</div></div>';
+  $('#doBye').onclick = () => $('#quit').click();
 }
 
 function renderStages(checked){

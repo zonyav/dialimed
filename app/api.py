@@ -256,6 +256,19 @@ async def status() -> dict:
     }
 
 
+@app.post("/api/update/install")
+async def update_install() -> dict:
+    """Подменить файл программы новой версией.
+
+    Ошибки возвращаются текстом, а не кодом: страница показывает их рядом
+    с кнопкой, и после любой из них остаётся работать прежняя версия.
+    """
+
+    from .update import install
+
+    return await install()
+
+
 def _cap(s: str) -> str:
     s = (s or "").strip()
     if not s:

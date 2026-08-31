@@ -204,6 +204,13 @@ def main() -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
+    # прежняя версия, отодвинутая обновлением, занята до самого выхода —
+    # убираем её при следующем запуске
+    if getattr(sys, "frozen", False):
+        from app.update import sweep
+
+        sweep()
+
     if args.web or (getattr(sys, "frozen", False) and not args.ktru
                     and not args.file and not args.compact_cache):
         return serve(args.port, not args.no_browser)
