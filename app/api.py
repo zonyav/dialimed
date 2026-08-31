@@ -138,25 +138,11 @@ def _busy_message(job: Job) -> str:
             "Дождитесь его окончания или остановите кнопкой «Остановить».")
 
 
-# Во сколько времени прогона обходится каждый этап. Доли приблизительные,
-# но точная оценка тут и не нужна: остаток считается от реально
-# потраченного времени, поэтому замедление ЕИС учитывается само собой.
-STAGE_WEIGHT = {"поиск": 0.05, "контракты": 0.45, "НМЦК": 0.15,
-                "РЗН": 0.25, "вид": 0.10}
-STAGE_ORDER = list(STAGE_WEIGHT)
-
-
-def _eta(stage: str, done: int, total: int, elapsed: float) -> int:
-    """Сколько секунд осталось. 0 — «пока не берусь сказать»."""
-
-    if stage not in STAGE_WEIGHT or elapsed < 8:
-        return 0
-    passed = sum(STAGE_WEIGHT[s] for s in STAGE_ORDER[:STAGE_ORDER.index(stage)])
-    part = min(1.0, max(0.0, done / total)) if total else 0.0
-    share = passed + STAGE_WEIGHT[stage] * part
-    if share < 0.03:
-        return 0
-    return max(1, round(elapsed * (1 - share) / share))
+# Обратного отсчёта во время прогона нет намеренно: он считался от доли
+# сделанной работы и потому рос по ходу дела — 29 минут перед запуском,
+# 49 через четверть часа. Человеку это читалось как «программа не знает,
+# что делает». Оценка даётся один раз, перед запуском (timing.pace), а во
+# время прогона показываются только прошедшие минуты — их видно и так.
 
 
 class RunRequest(BaseModel):
@@ -332,7 +318,7 @@ async def ktru_check(req: KtruCheckRequest) -> dict:
         ],
         "nkmi": nkmi_out,
         "bad": bad,
-        "sec_per_contract": round(timing.per_contract(), 2),
+        "sec_per_contract": round(timing.pace(), 2),
     }
 
 
@@ -394,11 +380,9 @@ async def _run(job: Job) -> None:
     global CURRENT
 
     async with RUN_LOCK:
-        began = time.monotonic()
 
         def progress(stage: str, text: str, done: int, total: int) -> None:
-            job.emit("progress", stage=stage, text=text, done=done, total=total,
-                     eta=_eta(stage, done, total, time.monotonic() - began))
+            job.emit("progress", stage=stage, text=text, done=done, total=total)
 
         try:
             job.emit("progress", stage="старт", text="подготовка", done=0, total=1)

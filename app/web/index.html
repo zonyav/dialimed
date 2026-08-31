@@ -202,7 +202,6 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
   margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
 .clock{color:var(--dim);font-size:13.5px;font-variant-numeric:tabular-nums;
   flex:1;min-width:200px}
-.clock .eta{color:var(--lime)}
 
 /* ── итоговые числа ─────────────────────────────────────────────── */
 .figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(126px,1fr));
@@ -344,7 +343,8 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
     <div class="stack">
       <span id="queryText" style="flex:1;min-width:220px;font-size:14px;
         color:var(--dim);line-height:1.5"></span>
-      <button id="editQuery" class="quiet small" type="button">Изменить запрос</button>
+      <!-- во время прогона запрос менять нечем: сначала «Остановить» -->
+      <button id="editQuery" class="quiet small hidden" type="button">Изменить запрос</button>
     </div>
   </div>
 
@@ -815,18 +815,17 @@ function renderSteps(active){
   }).join('');
 }
 
-let timer = null, startedAt = 0, etaSec = 0;
+let timer = null, startedAt = 0;
 
+/* Только прошедшее время. Обратный отсчёт был обещанием, которое росло
+   по ходу прогона, — сколько осталось, программа честно не знает. */
 function tick(){
   const s = Math.round((Date.now() - startedAt) / 1000);
-  let text = 'идёт ' + Math.floor(s / 60) + ' мин ' + (s % 60) + ' с';
-  if(etaSec > 0) text += ' · <span class="eta">осталось ' + howLong(etaSec) + '</span>';
-  $('#clock').innerHTML = text;
+  $('#clock').textContent = 'идёт ' + Math.floor(s / 60) + ' мин ' + (s % 60) + ' с';
 }
 
 function startClock(){
   startedAt = Date.now();
-  etaSec = 0;
   clearInterval(timer);
   tick();
   timer = setInterval(tick, 1000);
@@ -909,6 +908,7 @@ function attach(job){
   if(stream){ stream.close(); stream = null; }
   $('#results').classList.add('hidden');
   $('#progress').classList.remove('hidden');
+  $('#editQuery').classList.add('hidden');
   $('#go').disabled = true;
   $('#stop').disabled = false;
   renderSteps('');
@@ -931,7 +931,6 @@ function attach(job){
 }
 
 function onProgress(p){
-  if(typeof p.eta === 'number'){ etaSec = p.eta; tick(); }
   const total = Number(p.total) || 0;
   const pcent = total ? Math.round(100 * p.done / total) : 0;
   $('#stageText').textContent = p.text || p.stage;
@@ -948,6 +947,8 @@ function finish(){
   stopClock();
   $('#go').disabled = false;
   $('#progress').classList.add('hidden');
+  // прогон кончился — сам ли, кнопкой «Остановить» — запрос снова можно менять
+  $('#editQuery').classList.remove('hidden');
   loadReports();
 }
 
@@ -1451,6 +1452,7 @@ async function boot(){
         CURRENT_JOB = cur.last;
         $('#ctx').textContent = st.note || '';
         collapseForm(st.note || '');
+        $('#editQuery').classList.remove('hidden');
         onDone(st.summary);
       }
     }
