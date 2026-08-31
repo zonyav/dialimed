@@ -139,7 +139,11 @@ def serve(port: int, open_browser: bool) -> int:
         threading.Timer(1.5, _open).start()
     from app.api import app as web_app
 
-    uvicorn.run(web_app, host="127.0.0.1", port=chosen, log_level="warning")
+    # asyncio и h11 — то, на что uvicorn и так переходит без быстрых
+    # надстроек. Просим их явно: одному человеку на localhost httptools
+    # и uvloop не нужны, а в exe они весят.
+    uvicorn.run(web_app, host="127.0.0.1", port=chosen,
+                log_level="warning", loop="asyncio", http="h11")
     return 0
 
 

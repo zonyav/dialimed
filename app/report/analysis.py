@@ -23,7 +23,6 @@ def discount_stats(rows: Iterable[Row]) -> dict:
                                                     SMALL_VOLUME))
     return {
         "median": _pct(statistics.median(lowered)) if lowered else None,
-        "median_all": _pct(statistics.median(known)) if known else None,
         "max": _pct(max(known)) if known else None,
         "lowered": len(lowered),
         "known": len(known),

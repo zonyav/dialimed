@@ -198,11 +198,17 @@ class RznCache:
     def __init__(self, db_path):
         self.db_path = db_path
         self._lock = asyncio.Lock()
-        self._db = sqlite3.connect(db_path, check_same_thread=False)
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("""CREATE TABLE IF NOT EXISTS rzn (
-                                key TEXT PRIMARY KEY, payload TEXT, ts INTEGER)""")
-        self._db.commit()
+        self._db: Optional[sqlite3.Connection] = None
+        db = self._conn()
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("""CREATE TABLE IF NOT EXISTS rzn (
+                          key TEXT PRIMARY KEY, payload TEXT, ts INTEGER)""")
+        db.commit()
+
+    def _conn(self) -> sqlite3.Connection:
+        if self._db is None:
+            self._db = sqlite3.connect(self.db_path, check_same_thread=False)
+        return self._db
 
     def close(self) -> None:
         if self._db is not None:
@@ -218,8 +224,8 @@ class RznCache:
             return await asyncio.to_thread(self._get, kind, value, size)
 
     def _get(self, kind: str, value: str, size: int) -> Optional[_Answer]:
-        row = self._db.execute("SELECT payload, ts FROM rzn WHERE key=?",
-                               (self._key(kind, value),)).fetchone()
+        row = self._conn().execute("SELECT payload, ts FROM rzn WHERE key=?",
+                                   (self._key(kind, value),)).fetchone()
         if not row:
             return None
         try:
@@ -247,11 +253,11 @@ class RznCache:
     def _put(self, kind: str, value: str, items: list, size: int,
              total: Optional[int]) -> None:
         payload = {"c": items, "s": size, "t": total}
-        self._db.execute(
-            "INSERT OR REPLACE INTO rzn(key, payload, ts) VALUES (?,?,?)",
-            (self._key(kind, value), json.dumps(payload, ensure_ascii=False),
-             int(time.time())))
-        self._db.commit()
+        db = self._conn()
+        db.execute("INSERT OR REPLACE INTO rzn(key, payload, ts) VALUES (?,?,?)",
+                   (self._key(kind, value), json.dumps(payload, ensure_ascii=False),
+                    int(time.time())))
+        db.commit()
 
 
 class RznEnricher:

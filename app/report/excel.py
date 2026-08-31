@@ -19,7 +19,6 @@ HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(name=FONT_HEAD, color="FFFFFF", bold=False, size=11)
 BODY_FONT = Font(name=FONT, size=11)
 LINK_FONT = Font(name=FONT, size=11, color="1F6FEB", underline="single")
-RU_LINK_FONT = Font(name=FONT, size=11, color="1F6FEB", underline="single")
 
 ALT_FILL = PatternFill("solid", fgColor="F4F6FA")
 PRICE_FILL = PatternFill("solid", fgColor="FFF3C4")
@@ -102,14 +101,17 @@ def _sheet_positions(ws: Worksheet, result: RunResult) -> None:
     # в списке на странице
     titles = groups.assign(r.pos.manufacturer for r in result.rows)
 
+    # раскладку колонок считаем один раз: иначе на отчёт в тысячу строк
+    # приходится двадцать тысяч одинаковых поисков по словарю
+    plan = [(name, i, *LAYOUT.get(name, DEFAULT_LAYOUT)[1:]) for name, i in idx.items()]
+
     n = 0
     for row in result.rows:
         n += 1
         r = n + 1
         data = row.as_dict()
         striped = n % 2 == 0
-        for name, i in idx.items():
-            _w, align, fmt, wrap = LAYOUT.get(name, DEFAULT_LAYOUT)
+        for name, i, align, fmt, wrap in plan:
             value = data[name]
             if name == "Производитель":
                 value = titles.get(row.pos.manufacturer, value)
@@ -137,7 +139,7 @@ def _sheet_positions(ws: Worksheet, result: RunResult) -> None:
         if card:
             ru = ws.cell(row=r, column=idx["№ РУ"])
             ru.hyperlink = card
-            ru.font = RU_LINK_FONT
+            ru.font = LINK_FONT
 
         link = ws.cell(row=r, column=idx[LINK_COLUMN])
         if isinstance(link.value, str) and link.value.startswith("http"):

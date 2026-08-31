@@ -124,7 +124,7 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
         await _fill_nmck(client, [m for m, _ in parsed], result, progress)
 
     rows = _collect_rows(parsed, wanted, result)
-    await _enrich(rows, params, result, progress)
+    await _enrich(rows, result, progress)
 
     result.rows = rows
     result.stats.update({
@@ -300,7 +300,7 @@ def _parse_names(rows: list[Row]) -> None:
             p.mark_source = "товарный знак" if p.mark else ""
 
 
-async def _enrich(rows: list[Row], params: SearchParams, result: RunResult,
+async def _enrich(rows: list[Row], result: RunResult,
                   progress: Progress) -> None:
 
     if not rows:
