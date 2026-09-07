@@ -26,6 +26,11 @@ DEAD_AFTER = 6
 
 RU_NAME_THRESHOLD = 0.62
 
+# Поиск в реестре идёт по вхождению, поэтому по короткому номеру приходят и
+# чужие, более длинные. Со страницей в 5 записей ответ то и дело оказывался
+# неполным, и точное совпадение выбрасывалось вместе с ним.
+NUMBER_PAGE = 25
+
 EMPTY_TTL_DAYS = max(1, settings.cache_ttl_days // 4)
 
 
@@ -46,6 +51,7 @@ class RznRecord:
     declarant_inn: str = ""
     models_description: str = ""
     variants: list[str] = field(default_factory=list)
+    name_mismatch: bool = False
 
 
 def _norm(s: str) -> str:
@@ -270,7 +276,7 @@ class RznEnricher:
         self._client: Optional[httpx.AsyncClient] = None
         self.stats = {"by_ru": 0, "by_erul": 0, "by_tu": 0, "cache": 0,
                       "miss": 0, "errors": 0, "low_score": 0, "too_generic": 0,
-                      "ambiguous": 0, "wrong_type": 0, "skipped": 0,
+                      "ambiguous": 0, "name_mismatch": 0, "skipped": 0,
                       "wrong_number": 0,
                       "truncated": 0,
                       "lost_positions": 0, "crashed": 0}
@@ -483,14 +489,14 @@ class RznEnricher:
             return None
 
         if erul:
-            ans = await self._query("noErul", erul, size=5)
+            ans = await self._query("noErul", erul, size=NUMBER_PAGE)
             items = self._same_number(ans.items, erul)
             if items and self._one_producer(items, ans):
                 self.stats["by_erul"] += 1
                 return self._record(items[0], "noErul", 1.0, type_hints)
 
         if ru_number:
-            ans = await self._query("noRu", ru_number, size=5)
+            ans = await self._query("noRu", ru_number, size=NUMBER_PAGE)
             items = self._same_number(ans.items, ru_number)
             if items and not self._one_producer(items, ans):
                 items = []
@@ -502,11 +508,17 @@ class RznEnricher:
                 best_name = best.get("name") or ""
                 kind_ok = not type_hints or _same_device_kind(best_name, type_hints)
                 name_ok = not ru_name or similarity(ru_name, best_name) >= RU_NAME_THRESHOLD
-                if not kind_ok and not name_ok:
-                    self.stats["wrong_type"] += 1
-                else:
-                    self.stats["by_ru"] += 1
-                    return self._record(best, "noRu", score, type_hints)
+                rec = self._record(best, "noRu", score, type_hints)
+                # Номер выписан в контракте дословно и совпал посимвольно,
+                # производитель под ним один — этого довольно. Реестр называет
+                # изделие своими словами («Система эндоскопическая» там, где
+                # КТРУ пишет «Видеогастроскоп гибкий»), и раньше такая запись
+                # выбрасывалась целиком. Теперь она берётся, но помечается.
+                rec.name_mismatch = not kind_ok and not name_ok
+                if rec.name_mismatch:
+                    self.stats["name_mismatch"] += 1
+                self.stats["by_ru"] += 1
+                return rec
 
         if tu_number:
             rec = await self.lookup_by_tu(tu_number, ru_name, type_hints)

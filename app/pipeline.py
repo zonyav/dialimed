@@ -345,6 +345,47 @@ async def _enrich(rows: list[Row], result: RunResult,
             r.pos.manufacturer_source = ""
             r.pos.confidence = r.pos.confidence or "low"
     _drop_without_ru(rows, result)
+    _note_registry_gaps(rows, result)
+
+
+def _note_registry_gaps(rows: list[Row], result: RunResult) -> None:
+    """Красные ячейки в отчёте — это не «в данных пусто», а отброшенная или
+    ненайденная запись реестра. Сколько их и почему — оператор должен видеть
+    в сводке, а не догадываться, глядя на строку с номером РУ."""
+
+    rzn = result.stats.get("РЗН") or {}
+
+    def positions(n: int) -> str:
+        return "позиции" if n % 10 == 1 and n % 100 != 11 else "позициям"
+
+    blind = sum(1 for r in rows if r.pos.ru_number and not r.pos.manufacturer)
+    if blind:
+        result.stats["РУ есть, производитель не найден"] = blind
+        reasons = []
+        if rzn.get("ambiguous"):
+            reasons.append("под одним номером в реестре разные производители")
+        if rzn.get("wrong_number"):
+            reasons.append("реестр записывает номер иначе, чем контракт")
+        if rzn.get("truncated"):
+            reasons.append("реестр вернул неполный ответ")
+        if rzn.get("errors"):
+            reasons.append("реестр отвечал с ошибками")
+        why = "; ".join(reasons) or ("записи с таким номером в реестре нет "
+                                     "или в ней не назван производитель")
+        result.problems.append(Problem(
+            "—", "РЗН",
+            f"по {blind} {positions(blind)} № РУ в контракте есть, но запись "
+            f"реестра не взята: {why}. В отчёте эти ячейки окрашены красным"))
+
+    weak = sum(1 for r in rows
+               if r.pos.manufacturer_source == "реестр РЗН (наименование не совпало)")
+    if weak:
+        result.stats["взято по номеру, наименование не совпало"] = weak
+        result.problems.append(Problem(
+            "—", "РЗН",
+            f"по {weak} {positions(weak)} производитель взят по точному номеру РУ, "
+            "хотя реестр называет изделие иначе, чем контракт — "
+            "такие строки стоит просмотреть глазами"))
 
 
 def _drop_without_ru(rows: list[Row], result: RunResult) -> None:
@@ -1020,10 +1061,18 @@ def _apply_registry(p: Position, rec, source: str = "") -> None:
         return
     if rec.producer:
         p.manufacturer = clean_company(rec.producer)
-        p.manufacturer_source = source or ("реестр РЗН (по № ТУ)" if rec.match == "tu"
-                                           else "реестр РЗН")
+        if source:
+            p.manufacturer_source = source
+        elif rec.match == "tu":
+            p.manufacturer_source = "реестр РЗН (по № ТУ)"
+        elif rec.name_mismatch:
+            p.manufacturer_source = "реестр РЗН (наименование не совпало)"
+        else:
+            p.manufacturer_source = "реестр РЗН"
         p.confidence = {"noRu": "high", "tu": "high", "name": "medium",
                         "mark": "medium"}.get(rec.match, "medium" if source else "low")
+        if rec.name_mismatch:
+            p.confidence = "medium"
     eng = _mark_key(rec.producer_eng)
     if eng and p.mark and len(p.mark.split()) >= 3 and _mark_key(p.mark) in eng:
         p.mark = ""
