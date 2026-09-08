@@ -45,21 +45,18 @@ jobs:
       - name: Собрать exe
         run: python -m PyInstaller --noconfirm Medizdeliya.spec
 
-      - name: Назвать файл с номером версии
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force release | Out-Null
-          Copy-Item dist/Medizdeliya.exe "release/Medizdeliya-$env:VERSION.exe"
-
+      # Имя файла не зависит от версии: программа обновляется подменой самой
+      # себя, и ярлык у коллеги обязан пережить обновление. Версию видно в
+      # названии релиза и в самой программе, в имени файла она только мешает.
       - name: Приложить файл к сборке
         uses: actions/upload-artifact@v4
         with:
           name: Medizdeliya-${{ env.VERSION }}
-          path: release/*.exe
+          path: dist/Medizdeliya.exe
 
       - name: Опубликовать релиз
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.exe
+          files: dist/Medizdeliya.exe
           generate_release_notes: true
