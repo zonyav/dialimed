@@ -977,6 +977,11 @@ async def ai_state() -> dict:
         "model": opts["model"],
         "base": opts["base"],
         "models": AI_MODELS,
+        # чем кончилась последняя проверка: страница пишет «ключ сохранён и
+        # проверен» вместо пустого поля, куда тянет вставить ключ ещё раз
+        "checked_ok": opts["checked_ok"],
+        "checked_at": opts["checked_at"],
+        "checked_note": opts["checked_note"],
     }
 
 
@@ -989,22 +994,34 @@ async def ai_save(req: AiRequest) -> dict:
     return await ai_state()
 
 
+# столько ждём шлюз на кнопке «Сохранить и проверить»: человек стоит над
+# страницей, и минута ожидания читается как зависшая программа
+PROBE_TIMEOUT = 25.0
+
+
 @app.post("/api/ai/check")
 async def ai_check() -> dict:
-    """Кнопка «Проверить»: один короткий вопрос шлюзу. Ответ — по-русски
-    и про то, что делать: ключ, деньги на счёте или выключенный прокси."""
+    """Один короткий вопрос шлюзу. Ответ — по-русски и про то, что делать:
+    ключ, деньги на счёте или выключенный прокси. Итог запоминается в
+    data/ai.json, чтобы страница потом показывала «ключ сохранён и проверен»,
+    а не пустое поле, в которое хочется вставить ключ второй раз."""
 
-    from .config import ai_options
+    from .config import ai_options, save_ai_options
     from .enrich.aimatch import Gateway
 
     opts = ai_options()
+    if not opts["key"]:
+        return {"ok": False, "message": "Ключ не задан — вставьте его в поле выше.",
+                **await ai_state()}
     try:
-        async with Gateway(opts["key"], opts["model"], opts["base"]) as gw:
+        async with Gateway(opts["key"], opts["model"], opts["base"],
+                           timeout=PROBE_TIMEOUT) as gw:
             ok, message = await gw.probe()
     except Exception as e:                    # проверка не должна падать никогда
         log.warning("проверка ключа ИИ: %s: %s", type(e).__name__, e)
-        return {"ok": False, "message": f"Не удалось обратиться к шлюзу: {e}"}
-    return {"ok": ok, "message": message}
+        ok, message = False, Gateway.explain(f"{type(e).__name__}: {e}")
+    await asyncio.to_thread(save_ai_options, checked=(ok, message))
+    return {"ok": ok, "message": message, **await ai_state()}
 
 
 @app.get("/api/cache")

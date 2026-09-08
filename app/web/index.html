@@ -406,33 +406,36 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
       <span class="hint" id="aiHint" style="margin:0;flex:1;min-width:170px"></span>
     </div>
     <div id="aiPanel" class="hidden" style="margin-top:14px">
-      <div class="note"><b>Что это такое</b>
-        Программа спрашивает ИИ только о тех строках, где производителя не удалось
-        определить обычным путём. Завод ИИ не называет: он ищет изделие в реестре
-        Росздравнадзора и приводит цитату из найденной записи. Цитату программа
-        сверяет с реестром, а производителя, держателя и ИНН берёт оттуда же —
-        не со слов ИИ. Выходит около 15 копеек и +7 минут на прогон.</div>
-      <div class="note"><b>Что нужно настроить один раз</b>
-        1. Завести ключ на шлюзе api.odirouter.ai и положить на счёт немного денег.<br>
-        2. Включить прокси — из России шлюз напрямую не открывается.<br>
-        3. Вставить ключ в поле ниже, сохранить и нажать «Проверить».</div>
-      <label for="aiKey">Ключ шлюза</label>
-      <input type="password" id="aiKey" placeholder="вставьте ключ и нажмите «Сохранить»"
-             autocomplete="off" spellcheck="false">
-      <div class="hint" id="aiKeyHint"></div>
-      <div class="sect">Модель</div>
-      <div class="stack" id="aiModels"></div>
+      <div class="note">
+        Программа спрашивает ИИ только о строках, где производителя не удалось
+        определить обычным путём, и всё, что он ответит, сверяет с реестром
+        Росздравнадзора: в отчёт данные идут оттуда, а не со слов модели.
+        Около 15 копеек и +7 минут на прогон. Текст позиций при этом уходит на
+        сторонний сервис — это открытые данные госзакупок, но решение ваше.</div>
+
+      <!-- ключ уже есть: главное здесь — что вводить его заново не нужно -->
+      <div class="note hidden" id="aiSaved"></div>
+
+      <!-- ключа нет или его меняют -->
+      <div id="aiEntry">
+        <div class="hint" style="margin-bottom:10px">Ключ заводится один раз на
+          api.odirouter.ai, на счёт нужно положить немного денег. Из России шлюз
+          открывается только через прокси — включите его перед проверкой.</div>
+        <label for="aiKey">Ключ шлюза</label>
+        <input type="password" id="aiKey" placeholder="вставьте ключ сюда"
+               autocomplete="off" spellcheck="false">
+        <div class="hint" id="aiKeyHint"></div>
+      </div>
+
       <div class="stack" style="margin-top:14px">
-        <button id="aiSave" class="quiet small" type="button">Сохранить ключ</button>
-        <button id="aiCheck" class="quiet small" type="button">Проверить</button>
+        <button id="aiSave" class="quiet small" type="button">Сохранить и проверить</button>
+        <button id="aiReplace" class="quiet small hidden" type="button">Заменить ключ</button>
+        <button id="aiCancel" class="quiet small hidden" type="button">Отмена</button>
         <span class="hint" id="aiCheckHint" style="margin:0;flex:1;min-width:170px"></span>
       </div>
-      <div class="note warn"><b>О чём стоит знать</b>
-        Текст позиций уходит на сторонний сервис — это открытые данные госзакупок,
-        но решение ваше. Сам ключ не уходит никуда, кроме шлюза: ни в отчёт, ни на
-        эту страницу он не попадает, а на диске лежит зашифрованным средствами
-        Windows. Без ключа, без интернета и со снятой галочкой программа работает
-        ровно как раньше.</div>
+
+      <div class="sect">Модель</div>
+      <div class="stack" id="aiModels"></div>
     </div>
    </div>
 
@@ -631,10 +634,21 @@ function askText(title, value){
 }
 
 async function api(url, opts){
-  const r = await fetch(url, opts);
+  let r;
+  try{
+    r = await fetch(url, opts);
+  }catch(e){
+    // так fetch падает ровно в одном случае: программы на том конце уже нет,
+    // а страница осталась открытой. «Failed to fetch» об этом не говорит,
+    // и человек ищет причину в ключе, в прокси, в чём угодно
+    throw new Error('Программа не отвечает: её окно закрыто или она была ' +
+                    'перезапущена. Запустите её снова и обновите эту страницу.');
+  }
   let data = null;
   try{ data = await r.json(); }catch(e){}
-  if(!r.ok) throw new Error((data && data.detail) || ('Ошибка ' + r.status));
+  if(!r.ok) throw new Error((data && data.detail) ||
+    ('Программа ответила ошибкой ' + r.status +
+     (r.statusText ? ' (' + r.statusText + ')' : '')));
   return data;
 }
 
@@ -736,20 +750,50 @@ function params(){
 /* ── поиск через ИИ ─────────────────────────────────────────────── */
 
 let AI = {enabled: false, has_key: false, model: '', models: [], from_env: false};
+let AI_EDIT = false;   // человек нажал «Заменить ключ» — поле снова на виду
+
+/* что известно про ключ на словах: «сохранён» без «проверен» человек читает
+   как «может быть, и не работает», поэтому итог проверки хранится на диске
+   и переживает перезапуск программы */
+function aiVerdict(){
+  if(AI.checked_ok === true)
+    return 'Проверен ' + (AI.checked_at || 'ранее') + ' — шлюз отвечает.';
+  if(AI.checked_ok === false)
+    return 'Но при последней проверке (' + (AI.checked_at || '') + ') не сработал: '
+           + (AI.checked_note || 'причина не записана');
+  return 'Проверка ещё не делалась — нажмите «Проверить ключ».';
+}
 
 function renderAi(){
-  $('#useAi').checked = !!(AI.enabled && AI.has_key);
-  $('#useAi').disabled = !AI.has_key;
-  $('#aiHint').textContent = AI.has_key
-    ? ('ключ задан' + (AI.key_tail ? ' (…' + AI.key_tail + ')' : '') +
+  const has = !!AI.has_key;
+  const entry = !has || AI_EDIT;
+  $('#useAi').checked = !!(AI.enabled && has);
+  $('#useAi').disabled = !has;
+  $('#aiHint').textContent = has
+    ? ('ключ сохранён' + (AI.key_tail ? ' (…' + AI.key_tail + ')' : '') +
        ', модель ' + AI.model)
     : 'без ключа не работает — программа тогда ищет как раньше';
+
+  const box = $('#aiSaved');
+  box.classList.toggle('hidden', !has);
+  box.className = 'note' + (has ? '' : ' hidden') +
+    (AI.checked_ok === false ? ' warn' : (AI.checked_ok ? ' ok' : ''));
+  if(has)
+    box.innerHTML = '<b>Ключ уже сохранён' +
+      (AI.key_tail ? ' (…' + esc(AI.key_tail) + ')' : '') + '</b>' +
+      'Вводить его заново не нужно. ' + esc(aiVerdict());
+
+  $('#aiEntry').classList.toggle('hidden', !entry);
+  $('#aiReplace').classList.toggle('hidden', entry);
+  $('#aiCancel').classList.toggle('hidden', !(has && AI_EDIT));
+  $('#aiSave').textContent = entry ? 'Сохранить и проверить' : 'Проверить ключ';
+
   $('#aiKeyHint').textContent = AI.from_env
     ? 'ключ задан переменной MI_AI_KEY — поле выше её не перебьёт'
     : (AI.protected
-        ? 'вводится один раз: хранится на этом компьютере в зашифрованном виде — '
-          + 'открыть его можно только под вашей учётной записью Windows'
-        : 'вводится один раз и хранится на этом компьютере');
+        ? 'хранится на этом компьютере в зашифрованном виде и никуда, кроме '
+          + 'шлюза, не уходит'
+        : 'хранится на этом компьютере и никуда, кроме шлюза, не уходит');
   $('#aiModels').innerHTML = (AI.models || []).map(m =>
     '<label class="chk"><input type="radio" name="aimodel" value="' + esc(m.id) + '"' +
     (m.id === AI.model ? ' checked' : '') + '> ' + esc(m.id) +
@@ -768,25 +812,55 @@ async function saveAi(patch){
   renderAi();
 }
 
-$('#aiSetup').onclick = () => $('#aiPanel').classList.toggle('hidden');
-$('#useAi').onchange = () => saveAi({enabled: $('#useAi').checked});
-$('#aiSave').onclick = () => {
+/* одна кнопка на два дела: сохранить ключ и тут же спросить шлюз, работает ли
+   он. Раздельные «Сохранить» и «Проверить» заставляли человека помнить порядок,
+   а забытая проверка вылезала уже посреди прогона */
+async function aiSaveAndCheck(){
   const key = $('#aiKey').value.trim();
-  if(!key){ toast('Вставьте ключ в поле', true); return; }
-  $('#aiKey').value = '';
-  saveAi({key: key});
-};
-$('#aiCheck').onclick = async () => {
-  const btn = $('#aiCheck');
+  const entry = !AI.has_key || AI_EDIT;
+  if(entry && !key){
+    $('#aiCheckHint').textContent = AI.has_key
+      ? 'вставьте новый ключ в поле выше или нажмите «Отмена»'
+      : 'вставьте ключ в поле выше';
+    $('#aiKey').focus();
+    return;
+  }
+  const btn = $('#aiSave');
   btn.disabled = true;
-  $('#aiCheckHint').textContent = 'спрашиваю шлюз…';
+  $('#aiCheckHint').textContent = key ? 'сохраняю и спрашиваю шлюз…'
+                                      : 'спрашиваю шлюз…';
   try{
+    if(key){
+      AI = await post('/api/ai', {key: key});
+      $('#aiKey').value = '';
+    }
     const r = await post('/api/ai/check', {});
+    AI = r;
+    AI_EDIT = false;
     $('#aiCheckHint').textContent = r.message || (r.ok ? 'работает' : 'не работает');
   }catch(e){
-    $('#aiCheckHint').textContent = 'не получилось: ' + e.message;
+    $('#aiCheckHint').textContent = e.message;
   }
   btn.disabled = false;
+  renderAi();
+}
+
+$('#aiSetup').onclick = () => $('#aiPanel').classList.toggle('hidden');
+$('#useAi').onchange = () => saveAi({enabled: $('#useAi').checked});
+$('#aiSave').onclick = aiSaveAndCheck;
+$('#aiKey').addEventListener('keydown', e => {
+  if(e.key === 'Enter'){ e.preventDefault(); aiSaveAndCheck(); }
+});
+$('#aiReplace').onclick = () => {
+  AI_EDIT = true;
+  $('#aiCheckHint').textContent = '';
+  renderAi();
+  $('#aiKey').focus();
+};
+$('#aiCancel').onclick = () => {
+  AI_EDIT = false;
+  $('#aiKey').value = '';
+  renderAi();
 };
 
 /* ── проверка кодов ─────────────────────────────────────────────── */
@@ -965,10 +1039,37 @@ $('#editQuery').onclick = () => {
   window.scrollTo({top: 0, behavior: 'smooth'});
 };
 
+/* ключ ИИ проверяется до прогона, а не посреди него: мёртвый ключ, который
+   обнаружился на сороковой минуте, — это сорок потерянных минут */
+async function aiReadyForRun(){
+  $('#go').disabled = true;
+  $('#goHint').textContent = 'проверяю ключ ИИ…';
+  let r;
+  try{ r = await post('/api/ai/check', {}); }
+  catch(e){ r = {ok: false, message: e.message}; }
+  $('#goHint').textContent = '';
+  $('#go').disabled = false;
+  if(r && Array.isArray(r.models)){ AI = r; renderAi(); }
+  if(r && r.ok) return 'ok';
+  const go = await ask('Ключ ИИ сейчас не работает',
+    '<p>' + esc((r && r.message) || 'шлюз не ответил') + '</p>' +
+    '<p>Можно искать без ИИ — производителей программа определит обычным ' +
+    'способом, как делала до него.</p>', 'Искать без ИИ');
+  return go ? 'without' : '';
+}
+
 async function startRun(){
-  const p = params();
+  let p = params();
   if(!p.ktru.trim()){ toast('Укажите хотя бы один код КТРУ или НКМИ', true); return; }
   if(!p.stages.length){ toast('Выберите хотя бы одну стадию контракта', true); return; }
+  if(p.use_ai){
+    const verdict = await aiReadyForRun();
+    if(!verdict) return;
+    if(verdict === 'without'){
+      $('#useAi').checked = false;    // согласились искать без ИИ
+      p = params();
+    }
+  }
   $('#go').disabled = true;
   try{
     const res = await post('/api/run', p);

@@ -295,9 +295,10 @@ class Gateway:
             await self._client.aclose()
             self._client = None
 
-    async def ask(self, messages: list[dict]) -> str:
+    async def ask(self, messages: list[dict], *, attempts: int = 3) -> str:
         """Один вопрос модели. На прогонах 5–10% запросов падали и проходили
-        со второй попытки — поэтому повтор, а не отказ с первого раза."""
+        со второй попытки — поэтому повтор, а не отказ с первого раза. Кнопка
+        «Проверить» просит одну попытку: человек ждёт ответа, а не трёх."""
 
         if self._client is None:
             raise RuntimeError(self.problem or "ключ для ИИ не задан")
@@ -305,7 +306,7 @@ class Gateway:
                 "temperature": 0, "max_tokens": MAX_TOKENS}
         last = ""
         async with self._sem:
-            for attempt in range(3):
+            for attempt in range(max(1, attempts)):
                 try:
                     r = await self._client.post("/chat/completions", json=body)
                     r.raise_for_status()
@@ -318,8 +319,13 @@ class Gateway:
                             .get("content") or "")
                 except Exception as e:
                     last = f"{type(e).__name__}: {e}"
+                    # шлюз объясняет отказ в теле ответа: без него остаётся
+                    # голый номер ошибки, по которому непонятно, что делать
+                    body_text = getattr(getattr(e, "response", None), "text", "")
+                    if body_text:
+                        last += f" | {body_text[:300]}"
                     log.debug("шлюз ИИ, попытка %d: %s", attempt + 1, last)
-                    if attempt < 2:
+                    if attempt < attempts - 1:
                         await asyncio.sleep(1.5 * (attempt + 1))
         raise RuntimeError(last or "шлюз не ответил")
 
@@ -338,22 +344,50 @@ class Gateway:
         return out
 
     async def probe(self) -> tuple[bool, str]:
-        """Кнопка «Проверить» на странице: работает ли ключ прямо сейчас."""
+        """Кнопка «Сохранить и проверить» на странице: работает ли ключ прямо
+        сейчас. Одна попытка вместо трёх — ответ нужен за секунды."""
 
         if self.problem:
             return False, self.problem
         try:
-            await self.ask([{"role": "user", "content": "Ответь одним словом: готов"}])
+            await self.ask([{"role": "user", "content": "Ответь одним словом: готов"}],
+                           attempts=1)
         except Exception as e:
-            text = str(e)
-            if "401" in text or "403" in text:
-                return False, ("Шлюз не принял ключ. Проверьте, что он скопирован "
-                               "целиком и на счёте есть деньги.")
-            if "ConnectError" in text or "ConnectTimeout" in text or "Proxy" in text:
-                return False, ("Шлюз недоступен. Из России он открывается только "
-                               "через прокси: включите его и попробуйте снова.")
-            return False, f"Шлюз ответил ошибкой: {text[:200]}"
+            return False, self.explain(str(e))
         return True, f"Ключ работает, модель {self.model} отвечает."
+
+    @staticmethod
+    def explain(text: str) -> str:
+        """Отказ шлюза — по-русски и про то, что делать. «Ошибка» без причины
+        не говорит человеку ничего: одна и та же надпись стоит и за опечаткой
+        в ключе, и за пустым счётом, и за выключенным прокси."""
+
+        low = text.lower()
+        def has(*words: str) -> bool:
+            return any(w in low for w in words)
+
+        if has("connecterror", "connecttimeout", "proxy", "getaddrinfo",
+               "name or service"):
+            return ("Шлюз не открывается. Из России он доступен только через "
+                    "прокси — включите его и попробуйте снова.")
+        if has("sslerror", "certificate"):
+            return ("Соединение со шлюзом обрывается на проверке сертификата — "
+                    "так обычно ведёт себя антивирус или сетевой фильтр.")
+        if has("readtimeout", "timeout"):
+            return "Шлюз не ответил вовремя. Попробуйте ещё раз через минуту."
+        if has("401", "403", "invalid api key", "unauthorized"):
+            return ("Шлюз не принял ключ: он неверный или уже отозван. "
+                    "Скопируйте его на сайте шлюза целиком и вставьте заново.")
+        if has("402", "insufficient", "balance", "quota", "credit"):
+            return ("Ключ верный, но на счёте шлюза нет денег — пополните его "
+                    "на api.odirouter.ai.")
+        if has("429", "rate limit"):
+            return "Шлюз просит подождать: слишком много запросов подряд."
+        if has("404") or ("model" in low and "not" in low):
+            return "Шлюз не знает выбранную модель — выберите другую в списке."
+        if has("500", "502", "503", "504", "bad gateway"):
+            return "Сломался сам шлюз, а не ключ. Попробуйте позже."
+        return f"Шлюз ответил ошибкой: {text[:200]}"
 
 
 # ── кэш ответов модели ─────────────────────────────────────────────────────

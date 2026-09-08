@@ -242,19 +242,29 @@ def ai_options() -> dict:
         or settings.ai_base,
         "enabled": bool(saved.get("enabled")),
         "protected": bool(saved.get("key_protected")),
+        # чем кончилась последняя проверка ключа: страница показывает это
+        # вместо пустого поля ввода, чтобы ключ не вводили второй раз
+        "checked_ok": saved.get("checked_ok"),
+        "checked_at": str(saved.get("checked_at") or ""),
+        "checked_note": str(saved.get("checked_note") or ""),
     }
 
 
 def save_ai_options(*, key: str | None = None, model: str | None = None,
-                    enabled: bool | None = None) -> dict:
+                    enabled: bool | None = None,
+                    checked: tuple[bool, str] | None = None) -> dict:
     """Сохраняет то, что задал пользователь: один раз ввёл — больше не спросят.
     Пустой ключ стирает сохранённый — иначе убрать его можно только удалением
-    файла."""
+    файла. Новый ключ стирает и отметку о проверке: она была про старый."""
+
+    import time as _time
 
     saved = _read_ai_file()
     if key is not None:
         saved.pop("key", None)
         saved.pop("key_protected", None)
+        for stale in ("checked_ok", "checked_at", "checked_note"):
+            saved.pop(stale, None)
         key = key.strip()
         if key:
             locked = _lock_key(key)
@@ -266,6 +276,11 @@ def save_ai_options(*, key: str | None = None, model: str | None = None,
         saved["model"] = model.strip()
     if enabled is not None:
         saved["enabled"] = bool(enabled)
+    if checked is not None:
+        ok, note = checked
+        saved["checked_ok"] = bool(ok)
+        saved["checked_at"] = _time.strftime("%d.%m.%Y, %H:%M")
+        saved["checked_note"] = note
     _write_ai_file(saved)
     return ai_options()
 

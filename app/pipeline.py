@@ -515,9 +515,11 @@ async def _enrich_by_ai(rows: list[Row], result: RunResult,
             # запись под названным номером — единственный источник данных;
             # слова модели дальше этой строки не идут
             records: dict[str, object] = {}
+            last_error = ""
             for text, ans in answers.items():
                 if ans.error:
                     stats["ошибок шлюза"] += 1
+                    last_error = ans.error
                     continue
                 if not ans.answered:
                     stats["модель промолчала"] += 1
@@ -573,13 +575,16 @@ async def _enrich_by_ai(rows: list[Row], result: RunResult,
         stats["из них верно"] = right
         stats["точность"] = f"{round(100 * accuracy)}%"
     result.stats["ИИ"] = stats
-    _note_ai(result, stats, total, right, accuracy, blocked, stop_all)
+    _note_ai(result, stats, total, right, accuracy, blocked, stop_all, last_error)
 
 
 def _note_ai(result: RunResult, stats: dict, total: int, right: int,
-             accuracy: Optional[float], blocked: set[str], stop_all: bool) -> None:
+             accuracy: Optional[float], blocked: set[str], stop_all: bool,
+             last_error: str = "") -> None:
     """Сводка про ИИ пишется всегда, даже когда он не дал ничего: молчащий
     ИИ и выключенный ИИ выглядят в отчёте одинаково, а это разные вещи."""
+
+    from .enrich.aimatch import Gateway
 
     filled = stats["заполнено строк"]
     if stop_all:
@@ -598,10 +603,12 @@ def _note_ai(result: RunResult, stats: dict, total: int, right: int,
                        "Эти ячейки в отчёте залиты жёлтым: номер РУ нашла "
                        "программа, а не прочитала в контракте"))
     elif stats["ошибок шлюза"] >= max(3, stats["спрошено позиций"] // 2):
+        # причину знает шлюз, а не программа: пересказываем её словами,
+        # по которым видно, что делать — ключ, деньги или прокси
+        why = Gateway.explain(last_error)
         result.problems.append(Problem(
             "—", "ИИ", f"шлюз ИИ не отвечал ({stats['ошибок шлюза']} запросов "
-                       "с ошибкой) — прогон прошёл без него. Если доступ к шлюзу "
-                       "идёт через прокси, проверьте, что он включён"))
+                       f"с ошибкой) — прогон прошёл без него. {why}"))
     else:
         result.problems.append(Problem(
             "—", "ИИ", f"ИИ спросили о {stats['спрошено позиций']} позициях, "
