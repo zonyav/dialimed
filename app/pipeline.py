@@ -344,7 +344,7 @@ async def _enrich(rows: list[Row], result: RunResult,
         if not r.pos.manufacturer:
             r.pos.manufacturer_source = ""
             r.pos.confidence = r.pos.confidence or "low"
-    _drop_without_ru(rows, result)
+    _drop_holder_without_ru(rows, result)
     _note_registry_gaps(rows, result)
 
 
@@ -375,7 +375,7 @@ def _note_registry_gaps(rows: list[Row], result: RunResult) -> None:
         result.problems.append(Problem(
             "—", "РЗН",
             f"по {blind} {positions(blind)} № РУ в контракте есть, но запись "
-            f"реестра не взята: {why}. В отчёте эти ячейки окрашены красным"))
+            f"реестра не взята: {why}. В отчёте эти ячейки окрашены жёлтым"))
 
     weak = sum(1 for r in rows
                if r.pos.manufacturer_source == "реестр РЗН (наименование не совпало)")
@@ -388,25 +388,29 @@ def _note_registry_gaps(rows: list[Row], result: RunResult) -> None:
             "такие строки стоит просмотреть глазами"))
 
 
-def _drop_without_ru(rows: list[Row], result: RunResult) -> None:
-    """Без номера РУ производитель и держатель ничем не подтверждены —
-    в отчёт они не идут, чтобы догадка не выглядела как факт."""
+def _drop_holder_without_ru(rows: list[Row], result: RunResult) -> None:
+    """Держатель РУ и его ИНН бывают только у конкретной регистрации: без
+    номера подтвердить их нечем, и в отчёт они не идут. Сам производитель
+    остаётся — он вычислен по обозначению из строки, где номер был, и пустая
+    ячейка вместо него полезнее не делает. Дальше по отчёту такая догадка не
+    расходится: донором переноса служат только строки с номером."""
 
-    dropped = 0
+    kept = dropped = 0
     for r in rows:
         p = r.pos
         if p.ru_number:
             continue
-        if p.manufacturer or p.declarant or p.declarant_inn:
+        if p.declarant or p.declarant_inn:
             dropped += 1
-        p.manufacturer = ""
         p.declarant = ""
         p.declarant_inn = ""
         p.rzn_id = ""
-        p.manufacturer_source = ""
-        p.confidence = "low"
+        if p.manufacturer:
+            kept += 1
+    if kept:
+        result.stats["производитель без номера РУ"] = kept
     if dropped:
-        result.stats["снято без подтверждения по РУ"] = dropped
+        result.stats["держатель снят без номера РУ"] = dropped
 
 
 def _extends(short: str, long: str) -> bool:
@@ -876,16 +880,12 @@ def _mark_keys(mark: str, hints: Iterable[str] = ()) -> list[str]:
     return out
 
 
-def _number_source_ok(source: str) -> bool:
-    return source.startswith("реестр РЗН") and "по виду" not in source
-
-
 def _transfer_by_number(rows: list[Row], result: RunResult) -> None:
 
     donors: dict[tuple[str, str, str], list[Position]] = {}
     for r in rows:
         p = r.pos
-        if not p.manufacturer or not _number_source_ok(p.manufacturer_source):
+        if not p.manufacturer or not p.from_contract_number:
             continue
         for num in (p.ru_number, p.erul, p.tu_number):
             if not num:
@@ -948,7 +948,7 @@ def _transfer_by_mark(rows: list[Row], result: RunResult) -> None:
                 listed = "; ".join(x for x in (p.ru_variants, p.ru_registry_name) if x)
                 if listed:
                     variants[key] = (variants.get(key, "") + " " + listed).strip()
-                if _number_source_ok(p.manufacturer_source):
+                if p.from_contract_number:
                     numbered.add(key)
 
     moved = conflicts = dec_refused = 0

@@ -160,6 +160,24 @@ class Position:
             return ""
         return f"{RZN_CARD}{self.rzn_id}"
 
+    @property
+    def from_contract_number(self) -> bool:
+        """Производитель взят из реестра по номеру, который написан в самом
+        контракте, — самый надёжный путь. Срез по виду сюда не входит: там
+        номер выбрала программа, а не прочитала."""
+
+        s = self.manufacturer_source
+        return s.startswith("реестр РЗН") and "по виду" not in s
+
+    @property
+    def has_clue(self) -> bool:
+        """Было ли в позиции за что зацепиться: номер, обозначение модели
+        или товарный знак. Пустая ячейка при зацепке и пустая ячейка без неё —
+        разные новости, и в отчёте они разного цвета."""
+
+        return bool(self.ru_number or self.tu_number or self.erul
+                    or self.mark or self.trademark)
+
     def matches_ktru(self, wanted: set[str]) -> bool:
         return bool(self.ktru) and self.ktru in wanted
 

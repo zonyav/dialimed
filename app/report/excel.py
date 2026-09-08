@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -21,8 +22,10 @@ BODY_FONT = Font(name=FONT, size=11)
 LINK_FONT = Font(name=FONT, size=11, color="1F6FEB", underline="single")
 
 ALT_FILL = PatternFill("solid", fgColor="F4F6FA")
-PRICE_FILL = PatternFill("solid", fgColor="FFF3C4")
-PRICE_FILL_ALT = PatternFill("solid", fgColor="FDECAF")
+# заливка говорит одно: откуда взялось значение. Жёлтая — программа подобрала
+# сама и это стоит перепроверить; красная — в контракте не было ничего, за что
+# можно зацепиться, и вопрос не к программе, а к заказчику
+GUESS_FILL = PatternFill("solid", fgColor="FFE1B3")
 MISSING_FILL = PatternFill("solid", fgColor="F8CFCB")
 
 HAIR = Side(style="hair", color="C9CEDA")
@@ -33,11 +36,23 @@ INT = "#,##0"
 PERCENT = '0.0" %"'
 DATE = "DD.MM.YYYY"
 
-PRICE_COLUMN = "Цена за ед., ₽"
 MISSING_COLUMNS = ("№ РУ", "Производитель", "Держатель РУ в РФ",
                    "ИНН держателя РУ")
 LINK_COLUMN = "Ссылка на ЕИС"
 LINK_TEXT = "открыть в ЕИС"
+
+# через месяц после прогона по цвету уже не вспомнить, что он означал,
+# поэтому расшифровка висит примечанием на шапке «Производитель»
+LEGEND_COLUMN = "Производитель"
+LEGEND = "\n".join((
+    "Цвет ячейки:",
+    "• без заливки — взято из реестра по номеру РУ, "
+    "который указан в самом контракте;",
+    "• жёлтая — программа подобрала сама (по обозначению из соседней строки "
+    "или по срезу реестра); стоит перепроверить;",
+    "• красная — в контракте нет ни номера РУ, ни модели, ни товарного "
+    "знака: определять не по чему.",
+))
 
 LEFT = "left"
 CENTER = "center"
@@ -98,6 +113,10 @@ def _sheet_positions(ws: Worksheet, result: RunResult) -> None:
         cell.fill = HEADER_FILL
         cell.alignment = Alignment(horizontal=CENTER, vertical="center",
                                    wrap_text=True)
+        if name == LEGEND_COLUMN:
+            note = Comment(LEGEND, "Поиск медизделия")
+            note.width, note.height = 400, 150
+            cell.comment = note
     ws.row_dimensions[1].height = 38
 
     # в таблицу идёт объединённое имя производителя — то же, что
@@ -130,13 +149,13 @@ def _sheet_positions(ws: Worksheet, result: RunResult) -> None:
             if striped:
                 cell.fill = ALT_FILL
 
-        price = ws.cell(row=r, column=idx[PRICE_COLUMN])
-        price.fill = PRICE_FILL_ALT if striped else PRICE_FILL
-
+        clue = row.pos.has_clue
         for name in MISSING_COLUMNS:
             cell = ws.cell(row=r, column=idx[name])
             if not cell.value or cell.value == DASH:
-                cell.fill = MISSING_FILL
+                cell.fill = GUESS_FILL if clue else MISSING_FILL
+            elif name == "Производитель" and not row.pos.from_contract_number:
+                cell.fill = GUESS_FILL
 
         card = row.pos.rzn_url
         if card:

@@ -453,6 +453,46 @@ check("два разных завода по одному номеру — от�
                               ("ФСР 2010/09816", "131980", "", "")]),
       ['ООО "СПДС"', 'ООО "Ромашка"', ""])
 
+print("\n без номера РУ: завод остаётся, держатель уходит")
+from app.pipeline import _drop_holder_without_ru
+
+
+def _after_drop(pos: Position):
+    _drop_holder_without_ru([Row(ContractMeta(), pos)], RunResult())
+    return pos.manufacturer, pos.declarant, pos.declarant_inn
+
+
+check("номера нет — завод остаётся, держатель снят",
+      _after_drop(Position(manufacturer='ООО "СПДС"', declarant='ООО "Дилер"',
+                           declarant_inn="7701234567",
+                           manufacturer_source="перенос по обозначению")),
+      ('ООО "СПДС"', "", ""))
+check("номер есть — не трогаем",
+      _after_drop(Position(ru_number="ФСР 2010/09816", manufacturer='ООО "СПДС"',
+                           declarant='ООО "Дилер"', declarant_inn="7701234567",
+                           manufacturer_source="реестр РЗН")),
+      ('ООО "СПДС"', 'ООО "Дилер"', "7701234567"))
+check("догадка не становится донором переноса",
+      _after_number_transfer([("", "131980", 'ООО "СПДС"', "перенос по обозначению"),
+                              ("ФСР 2010/09816", "131980", "", "")]),
+      ['ООО "СПДС"', ""])
+
+print("\n цвет ячейки: откуда взялось значение")
+check("номер из контракта — заливки нет",
+      Position(manufacturer_source="реестр РЗН").from_contract_number, True)
+check("номер из соседней строки — тоже по номеру",
+      Position(manufacturer_source="реестр РЗН (номер из соседней строки)"
+               ).from_contract_number, True)
+check("срез по виду — подобрано программой",
+      Position(manufacturer_source="реестр РЗН (по виду)").from_contract_number, False)
+check("перенос по обозначению — подобрано программой",
+      Position(manufacturer_source="перенос по обозначению").from_contract_number, False)
+check("обозначение — зацепка есть", Position(mark="ЭК12Т-01").has_clue, True)
+check("товарный знак — зацепка есть", Position(trademark="BOWA").has_clue, True)
+check("номер ТУ — зацепка есть", Position(tu_number="ТУ 9442-001").has_clue, True)
+check("общие слова — зацепиться не за что",
+      Position(name="Аппарат ультразвуковой диагностики").has_clue, False)
+
 RU = "РЗН 2024/23069"
 check("обрывок достроен — исполнение в перечне реестра",
       _marks_after([(RU, "АРМЕД"), (RU, "АРМЕД"), (RU, "АРМЕД-230")],
