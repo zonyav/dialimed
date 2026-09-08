@@ -151,6 +151,13 @@ class RunRequest(BaseModel):
     date_to: str = ""
     stages: list[str] = Field(default_factory=lambda: list(DEFAULT_STAGES))
     limit_per_ktru: int = 0
+    use_ai: bool = False
+
+
+class AiRequest(BaseModel):
+    key: Optional[str] = None
+    model: Optional[str] = None
+    enabled: Optional[bool] = None
 
 
 @app.middleware("http")
@@ -342,6 +349,7 @@ async def start(req: RunRequest) -> dict:
         date_to=req.date_to,
         stages=req.stages or list(DEFAULT_STAGES),
         limit_per_ktru=max(0, req.limit_per_ktru),
+        use_ai=bool(req.use_ai),
     )
     job = Job(id=uuid.uuid4().hex[:12], params=params, note=describe(params))
     JOBS[job.id] = job
@@ -949,6 +957,53 @@ async def producers_rename(req: ProducerRequest) -> dict:
 
 class CacheClearRequest(BaseModel):
     areas: list[str] = Field(default_factory=list)
+
+
+@app.get("/api/ai")
+async def ai_state() -> dict:
+    """Состояние поиска через ИИ. Сам ключ странице не отдаём — только хвост,
+    чтобы человек узнал свой, и признак «задан переменной окружения»."""
+
+    from .config import AI_MODELS, ai_options
+
+    opts = ai_options()
+    key = opts["key"]
+    return {
+        "enabled": opts["enabled"],
+        "has_key": bool(key),
+        "key_tail": key[-4:] if len(key) > 4 else "",
+        "from_env": bool(os.environ.get("MI_AI_KEY")),
+        "model": opts["model"],
+        "base": opts["base"],
+        "models": AI_MODELS,
+    }
+
+
+@app.post("/api/ai")
+async def ai_save(req: AiRequest) -> dict:
+    from .config import save_ai_options
+
+    await asyncio.to_thread(save_ai_options, key=req.key, model=req.model,
+                            enabled=req.enabled)
+    return await ai_state()
+
+
+@app.post("/api/ai/check")
+async def ai_check() -> dict:
+    """Кнопка «Проверить»: один короткий вопрос шлюзу. Ответ — по-русски
+    и про то, что делать: ключ, деньги на счёте или выключенный прокси."""
+
+    from .config import ai_options
+    from .enrich.aimatch import Gateway
+
+    opts = ai_options()
+    try:
+        async with Gateway(opts["key"], opts["model"], opts["base"]) as gw:
+            ok, message = await gw.probe()
+    except Exception as e:                    # проверка не должна падать никогда
+        log.warning("проверка ключа ИИ: %s: %s", type(e).__name__, e)
+        return {"ok": False, "message": f"Не удалось обратиться к шлюзу: {e}"}
+    return {"ok": ok, "message": message}
 
 
 @app.get("/api/cache")

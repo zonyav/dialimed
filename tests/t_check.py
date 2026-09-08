@@ -493,6 +493,167 @@ check("номер ТУ — зацепка есть", Position(tu_number="ТУ 94
 check("общие слова — зацепиться не за что",
       Position(name="Аппарат ультразвуковой диагностики").has_clue, False)
 
+print("\n ИИ: ответ модели разбирается, а цитата сверяется с реестром")
+import asyncio as _asyncio
+from app.enrich.aimatch import (identify, mask_number, parse_reply,
+                                quote_supported, record_text)
+from app.enrich.rzn import NameSearch, RznRecord
+
+check("простой JSON", parse_reply('{"поиск": "EndoGlance"}'), {"поиск": "EndoGlance"})
+check("в заборе из обратных кавычек",
+      parse_reply('```json\n{"ответ": null, "почему": "нет"}\n```'),
+      {"ответ": None, "почему": "нет"})
+check("с пояснением вокруг",
+      parse_reply('Вот ответ: {"ответ": "ФСР 2010/07373"} — надеюсь, помог'),
+      {"ответ": "ФСР 2010/07373"})
+check("не JSON вовсе", parse_reply("не нашёл ничего"), {})
+
+_ЗАПИСЬ = RznRecord(ru_name='Гистероскоп EndoGlance®', producer='ООО "Эндомедиум+"',
+                    ru_number="РЗН 2019/8462", models_description="EndoGlance G-1")
+check("цитата из записи подтверждается",
+      quote_supported("Гистероскоп EndoGlance", record_text(_ЗАПИСЬ)), True)
+check("кавычки и ® сверке не мешают",
+      quote_supported('«EndoGlance®»', record_text(_ЗАПИСЬ)), True)
+check("выдуманная цитата не проходит",
+      quote_supported("Колоноскоп Пентакс Медикал", record_text(_ЗАПИСЬ)), False)
+check("пустая запись — не подтверждение",
+      quote_supported("EndoGlance", ""), False)
+check("номер спрятан для самопроверки",
+      mask_number("Тонометр, РУ № ФСР 2010/09816", "ФСР 2010/09816"),
+      "Тонометр, РУ № …")
+
+
+def _диалог(ответы, выдача=None):
+    шаги = list(ответы)
+
+    async def ask(_messages):
+        return шаги.pop(0)
+
+    async def search(_phrase):
+        return выдача if выдача is not None else NameSearch(items=[])
+
+    return _asyncio.run(identify("Гистероскоп EndoGlance", ask, search))
+
+
+_ОТВЕТ = _диалог(['{"поиск": "EndoGlance"}',
+                  '{"ответ": "РЗН 2019/8462", "цитата": "Гистероскоп EndoGlance"}'])
+check("после поиска модель называет номер", _ОТВЕТ.ru_number, "РЗН 2019/8462")
+check("и цитату", _ОТВЕТ.quote, "Гистероскоп EndoGlance")
+check("шагов ровно два", _ОТВЕТ.steps, 2)
+check("молчание — это не ответ",
+      _диалог(['{"ответ": null, "почему": "в реестре не нашёл"}']).answered, False)
+check("бесконечный поиск обрывается",
+      _диалог(['{"поиск": "а"}'] * 12).why, "не уложился в отведённые шаги")
+
+print("\n ИИ в конвейере: ответы идут в отчёт только после самопроверки")
+import app.config as _cfg
+import app.pipeline as _pl
+from app.enrich import aimatch as _am
+from app.enrich.aimatch import question
+
+
+class _Реестр:
+    """Реестр без сети: знает ровно те записи, что ему дали."""
+
+    def __init__(self, записи): self.записи = записи
+    async def __aenter__(self): return self
+    async def __aexit__(self, *e): return False
+    async def search_by_name(self, phrase, size=12): return NameSearch(items=[])
+    async def confirm_number(self, number): return self.записи.get(number)
+
+
+class _Шлюз:
+    """Шлюз без сети: отвечает на текст позиции заранее заданным JSON."""
+
+    problem = ""
+    model = "тест"
+
+    def __init__(self, *_a, **_k): pass
+    async def __aenter__(self): return self
+    async def __aexit__(self, *e): return False
+
+    async def ask(self, messages):
+        return _ОТВЕТЫ.get(messages[1]["content"],
+                           '{"ответ": null, "почему": "не нашёл"}')
+
+
+def _прогон(rows, записи, ответы):
+    global _ОТВЕТЫ
+    _ОТВЕТЫ = ответы
+    было_rzn, было_gw = _pl.RznEnricher, _am.Gateway
+    был_опрос, было_кэш = _cfg.ai_options, _cfg.settings.cache_enabled
+    _pl.RznEnricher = lambda *a, **k: _Реестр(записи)
+    _am.Gateway = _Шлюз
+    _cfg.ai_options = lambda: {"key": "sk-тест", "model": "тест", "base": "",
+                               "enabled": True}
+    _cfg.settings.cache_enabled = False
+    res = RunResult()
+    try:
+        _asyncio.run(_pl._enrich_by_ai(rows, res, lambda *a: None))
+    finally:
+        _pl.RznEnricher, _am.Gateway = было_rzn, было_gw
+        _cfg.ai_options, _cfg.settings.cache_enabled = был_опрос, было_кэш
+    return res
+
+
+_ЗАВОД = 'ООО "Эндомедиум+"'
+_ЗАПИСЬ_ИИ = RznRecord(rzn_id="1", producer=_ЗАВОД, ru_number="РЗН 2019/8462",
+                       ru_name="Гистероскоп EndoGlance", match="ai")
+
+
+def _строка(name, **kw):
+    return Row(ContractMeta(), Position(name=name, ktru="32.50.13.190-00001", **kw))
+
+
+def _пусто(n=1):
+    return [_строка("Гистероскоп EndoGlance") for _ in range(n)]
+
+
+def _проверочные(n, завод=_ЗАВОД):
+    return [_строка(f"Гистероскоп EndoGlance {i}", ru_number="РЗН 2019/8462",
+                    manufacturer=завод, manufacturer_source="реестр РЗН")
+            for i in range(n)]
+
+
+_ХОРОШО = ('{"ответ": "РЗН 2019/8462", "цитата": "Гистероскоп EndoGlance"}')
+_ВЫДУМКА = ('{"ответ": "РЗН 2019/8462", "цитата": "Колоноскоп Пентакс Медикал"}')
+
+_ROWS = _пусто(2) + _проверочные(3)
+_РЕЗ = _прогон(_ROWS, {"РЗН 2019/8462": _ЗАПИСЬ_ИИ},
+               {question(r.pos.contract_text(), r.pos.specs_text): _ХОРОШО
+                for r in _ROWS})
+check("завод из реестра проставлен", [r.pos.manufacturer for r in _ROWS[:2]],
+      [_ЗАВОД, _ЗАВОД])
+check("источник назван честно", _ROWS[0].pos.manufacturer_source, _am.SOURCE)
+check("одинаковый текст спрашиваем один раз",
+      _РЕЗ.stats["ИИ"]["спрошено позиций"], 4)
+
+_ROWS = _пусто(2) + _проверочные(3)
+_прогон(_ROWS, {"РЗН 2019/8462": _ЗАПИСЬ_ИИ},
+        {question(r.pos.contract_text(), r.pos.specs_text): _ВЫДУМКА
+         for r in _ROWS})
+check("выдуманная цитата в отчёт не идёт",
+      [r.pos.manufacturer for r in _ROWS[:2]], ["", ""])
+
+_ROWS = _пусто(2) + _проверочные(3)
+_прогон(_ROWS, {},
+        {question(r.pos.contract_text(), r.pos.specs_text): _ХОРОШО
+         for r in _ROWS})
+check("номера нет в реестре — ответ отброшен",
+      [r.pos.manufacturer for r in _ROWS[:2]], ["", ""])
+
+# самопроверка: на 25 позициях с известным ответом ИИ уверенно называет
+# чужой завод — значит на этом прогоне ему верить нельзя ни в одной строке
+_ROWS = _пусто(2) + _проверочные(25, завод='ЗАО "Другой завод"')
+_РЕЗ = _прогон(_ROWS, {"РЗН 2019/8462": _ЗАПИСЬ_ИИ},
+               {question(r.pos.contract_text(), r.pos.specs_text): _ХОРОШО
+                for r in _ROWS})
+check("провалил самопроверку — ответы не пишутся",
+      [r.pos.manufacturer for r in _ROWS[:2]], ["", ""])
+check("точность посчитана", _РЕЗ.stats["ИИ"]["точность"], "0%")
+check("и сказана словами",
+      any("в отчёт не пошли" in p.message for p in _РЕЗ.problems), True)
+
 RU = "РЗН 2024/23069"
 check("обрывок достроен — исполнение в перечне реестра",
       _marks_after([(RU, "АРМЕД"), (RU, "АРМЕД"), (RU, "АРМЕД-230")],

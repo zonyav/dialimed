@@ -44,6 +44,7 @@ class SearchParams:
     date_to: str = ""
     stages: list[str] = field(default_factory=lambda: list(DEFAULT_STAGES))
     limit_per_ktru: int = 0
+    use_ai: bool = False
 
 
 def describe(params: SearchParams) -> str:
@@ -55,7 +56,8 @@ def describe(params: SearchParams) -> str:
 
     return (f"КТРУ: {', '.join(params.ktru) or '—'}; период с {params.date_from}"
             f"{' по ' + params.date_to if params.date_to else ''}; "
-            f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}")
+            f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}"
+            f"{'; с поиском через ИИ' if params.use_ai else ''}")
 
 
 async def run_online(params: SearchParams, progress: Progress = _noop) -> RunResult:
@@ -124,7 +126,7 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
         await _fill_nmck(client, [m for m, _ in parsed], result, progress)
 
     rows = _collect_rows(parsed, wanted, result)
-    await _enrich(rows, result, progress)
+    await _enrich(rows, result, progress, use_ai=params.use_ai)
 
     result.rows = rows
     result.stats.update({
@@ -301,7 +303,7 @@ def _parse_names(rows: list[Row]) -> None:
 
 
 async def _enrich(rows: list[Row], result: RunResult,
-                  progress: Progress) -> None:
+                  progress: Progress, use_ai: bool = False) -> None:
 
     if not rows:
         return
@@ -344,6 +346,10 @@ async def _enrich(rows: list[Row], result: RunResult,
         if not r.pos.manufacturer:
             r.pos.manufacturer_source = ""
             r.pos.confidence = r.pos.confidence or "low"
+    # ИИ спрашиваем последним: всё, что находится бесплатно, к этому моменту
+    # уже найдено, и платить за эти строки незачем
+    if use_ai:
+        await _enrich_by_ai(rows, result, progress)
     _drop_holder_without_ru(rows, result)
     _note_registry_gaps(rows, result)
 
@@ -386,6 +392,201 @@ def _note_registry_gaps(rows: list[Row], result: RunResult) -> None:
             f"по {weak} {positions(weak)} производитель взят по точному номеру РУ, "
             "хотя реестр называет изделие иначе, чем контракт — "
             "такие строки стоит просмотреть глазами"))
+
+
+# Пороги самопроверки. Проверочные позиции берутся из самого прогона: там, где
+# номер РУ написан в контракте, правильный ответ известен заранее — прячем номер
+# и смотрим, попадёт ли модель. Правила ломались на новых кодах молча; здесь
+# программа меряет себя на тех данных, которые пользователь считает сейчас.
+AI_MAX_CHECKS = 40          # больше не нужно: точность видна и на сорока
+AI_ENOUGH_CHECKS = 20       # меньше — судить не о чем, но и запрещать не за что
+AI_MIN_ACCURACY = 0.95
+AI_CODE_CHECKS = 10         # по отдельному коду хватает и десяти проверок,
+AI_CODE_ACCURACY = 0.90     # чтобы увидеть, что именно на нём ИИ не работает
+
+
+def _ai_check_tasks(rows: list[Row]) -> dict[str, tuple[str, str]]:
+    """Задачи с известным ответом: строки, где номер РУ написан в контракте и
+    реестр по нему ответил. Берём поровну от каждого кода КТРУ — точность важно
+    видеть по коду, а не в среднем по больнице."""
+
+    from .enrich.aimatch import mask_number, question
+
+    by_code: dict[str, dict[str, tuple[str, str]]] = {}
+    for r in rows:
+        p = r.pos
+        if not (p.ru_number and p.manufacturer and p.from_contract_number):
+            continue
+        text = question(mask_number(p.contract_text(), p.ru_number),
+                        mask_number(p.specs_text, p.ru_number))
+        by_code.setdefault(p.ktru, {}).setdefault(
+            text, (company_key(p.manufacturer)[0], p.ktru))
+
+    picked: dict[str, tuple[str, str]] = {}
+    queues = [list(v.items()) for v in by_code.values()]
+    while len(picked) < AI_MAX_CHECKS and any(queues):
+        for q in queues:
+            if not q or len(picked) >= AI_MAX_CHECKS:
+                continue
+            text, meta = q.pop()
+            picked.setdefault(text, meta)
+    return picked
+
+
+async def _enrich_by_ai(rows: list[Row], result: RunResult,
+                        progress: Progress) -> None:
+    """Спрашивает модель о строках, оставшихся без производителя, и на том же
+    прогоне проверяет её на строках, где ответ известен. Ни одно поле отчёта не
+    заполняется словами модели: она называет номер, а данные берутся из реестра."""
+
+    from .config import ai_options
+    from .enrich.aimatch import (SOURCE, AiCache, Gateway, identify, question,
+                                 quote_supported, record_text)
+
+    opts = ai_options()
+    if not opts["key"]:
+        result.problems.append(Problem(
+            "—", "ИИ", "поиск через ИИ включён, но ключ не задан. Откройте "
+                       "«Поиск через ИИ» на странице и введите ключ — без него "
+                       "прогон прошёл как обычно"))
+        return
+
+    todo: dict[str, list[Position]] = {}
+    for r in rows:
+        p = r.pos
+        if p.manufacturer:
+            continue
+        todo.setdefault(question(p.contract_text(), p.specs_text), []).append(p)
+    checks = _ai_check_tasks(rows)
+    texts = list(dict.fromkeys(list(todo) + list(checks)))
+    if not texts:
+        return
+
+    stats = {"спрошено позиций": len(texts), "из них проверочных": len(checks),
+             "модель промолчала": 0, "цитата не подтвердилась": 0,
+             "номер не подтверждён реестром": 0, "ошибок шлюза": 0,
+             "заполнено строк": 0}
+    answers: dict[str, object] = {}
+    done = 0
+
+    progress("ИИ", "спрашиваю ИИ о позициях без производителя", 0, len(texts))
+    async with RznEnricher() as rzn:
+        async with Gateway(opts["key"], opts["model"], opts["base"]) as gw:
+            if gw.problem:
+                result.problems.append(Problem(
+                    "—", "ИИ", f"поиск через ИИ не запущен: {gw.problem} "
+                               "Прогон прошёл как обычно"))
+                return
+            cache = AiCache(settings.cache_db) if settings.cache_enabled else None
+            try:
+                async def one(text: str):
+                    if cache is not None:
+                        hit = await cache.get(gw.model, text)
+                        if hit is not None:
+                            return text, hit
+                    ans = await identify(text, gw.ask, rzn.search_by_name)
+                    if cache is not None and not ans.error:
+                        await cache.put(gw.model, text, ans)
+                    return text, ans
+
+                for coro in asyncio.as_completed([one(t) for t in texts]):
+                    text, ans = await coro
+                    answers[text] = ans
+                    done += 1
+                    progress("ИИ", f"{done} из {len(texts)}", done, len(texts))
+            finally:
+                if cache is not None:
+                    cache.close()
+
+            # запись под названным номером — единственный источник данных;
+            # слова модели дальше этой строки не идут
+            records: dict[str, object] = {}
+            for text, ans in answers.items():
+                if ans.error:
+                    stats["ошибок шлюза"] += 1
+                    continue
+                if not ans.answered:
+                    stats["модель промолчала"] += 1
+                    continue
+                rec = await rzn.confirm_number(ans.ru_number)
+                if rec is None or not rec.producer:
+                    stats["номер не подтверждён реестром"] += 1
+                    continue
+                if not quote_supported(ans.quote, record_text(rec)):
+                    stats["цитата не подтвердилась"] += 1
+                    continue
+                records[text] = rec
+
+    checked: dict[str, list[int]] = {}
+    for text, (want, code) in checks.items():
+        rec = records.get(text)
+        seen = checked.setdefault(code, [0, 0])
+        if text not in answers or answers[text].error:
+            continue
+        seen[0] += 1
+        if rec is not None and company_key(rec.producer)[0] == want:
+            seen[1] += 1
+
+    total = sum(v[0] for v in checked.values())
+    right = sum(v[1] for v in checked.values())
+    accuracy = right / total if total else None
+    blocked = {code for code, (n, ok) in checked.items()
+               if n >= AI_CODE_CHECKS and ok / n < AI_CODE_ACCURACY}
+    stop_all = bool(total >= AI_ENOUGH_CHECKS and accuracy < AI_MIN_ACCURACY)
+
+    for text, positions in todo.items():
+        rec = records.get(text)
+        if rec is None or stop_all:
+            continue
+        for p in positions:
+            if p.ktru in blocked:
+                continue
+            _apply_registry(p, rec, source=SOURCE)
+            stats["заполнено строк"] += 1
+
+    if total:
+        stats["проверок"] = total
+        stats["из них верно"] = right
+        stats["точность"] = f"{round(100 * accuracy)}%"
+    result.stats["ИИ"] = stats
+    _note_ai(result, stats, total, right, accuracy, blocked, stop_all)
+
+
+def _note_ai(result: RunResult, stats: dict, total: int, right: int,
+             accuracy: Optional[float], blocked: set[str], stop_all: bool) -> None:
+    """Сводка про ИИ пишется всегда, даже когда он не дал ничего: молчащий
+    ИИ и выключенный ИИ выглядят в отчёте одинаково, а это разные вещи."""
+
+    filled = stats["заполнено строк"]
+    if stop_all:
+        result.problems.append(Problem(
+            "—", "ИИ", f"ИИ проверен на {total} позициях с известным ответом, "
+                       f"верно {right} ({stats['точность']}) — это ниже порога, "
+                       "поэтому его ответы в отчёт не пошли. Строки остались "
+                       "пустыми, всё остальное в отчёте посчитано как обычно"))
+    elif filled:
+        checked = (f"; проверен на {total} позициях с известным ответом, "
+                   f"точность {stats['точность']}" if total
+                   else "; проверить его на этом прогоне было не на чем — "
+                        "в контрактах почти нет позиций с номером РУ")
+        result.problems.append(Problem(
+            "—", "ИИ", f"производитель подобран ИИ для {filled} строк{checked}. "
+                       "Эти ячейки в отчёте залиты жёлтым: номер РУ нашла "
+                       "программа, а не прочитала в контракте"))
+    elif stats["ошибок шлюза"] >= max(3, stats["спрошено позиций"] // 2):
+        result.problems.append(Problem(
+            "—", "ИИ", f"шлюз ИИ не отвечал ({stats['ошибок шлюза']} запросов "
+                       "с ошибкой) — прогон прошёл без него. Если доступ к шлюзу "
+                       "идёт через прокси, проверьте, что он включён"))
+    else:
+        result.problems.append(Problem(
+            "—", "ИИ", f"ИИ спросили о {stats['спрошено позиций']} позициях, "
+                       "подтверждённых ответов нет — все строки остались "
+                       "как были"))
+    for code in sorted(blocked):
+        result.problems.append(Problem(
+            code, "ИИ", "на этом коде КТРУ ИИ ошибался на проверочных позициях — "
+                        "его ответы по коду в отчёт не пошли"))
 
 
 def _drop_holder_without_ru(rows: list[Row], result: RunResult) -> None:

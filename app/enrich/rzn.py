@@ -31,6 +31,12 @@ RU_NAME_THRESHOLD = 0.62
 # неполным, и точное совпадение выбрасывалось вместе с ним.
 NUMBER_PAGE = 25
 
+# Агентный поиск: сколько записей показывать модели и с какого размера выдачи
+# запрос считается слишком общим. Реестр — 81 тысяча записей, и слово вроде
+# «аппарат» приводит их тысячами.
+SEARCH_PAGE = 12
+TOO_BROAD = 400
+
 EMPTY_TTL_DAYS = max(1, settings.cache_ttl_days // 4)
 
 
@@ -187,6 +193,17 @@ class _Answer:
     complete: bool = True
     answered: bool = True
     total: Optional[int] = None
+
+
+@dataclass(slots=True)
+class NameSearch:
+    """Ответ реестра на поиск по наименованию: записи, сколько их всего,
+    и две причины пустоты — «слишком общий запрос» и «реестр не ответил»."""
+
+    items: list[dict] = field(default_factory=list)
+    total: Optional[int] = None
+    too_broad: bool = False
+    answered: bool = True
 
 
 def _complete(items: list[dict], size: Optional[int], total: Optional[int]) -> bool:
@@ -405,6 +422,48 @@ class RznEnricher:
         if self._fails >= DEAD_AFTER:
             self._dead = True
         return None
+
+    async def search_by_name(self, phrase: str,
+                             size: int = SEARCH_PAGE) -> "NameSearch":
+        """Поиск по наименованию регистрации — вхождение подстроки. Нужен
+        агентному поиску (`enrich/aimatch.py`), где запросы придумывает модель.
+
+        Слишком широкая выдача — это отказ, а не ответ: одно общее слово
+        приводит половину реестра, и показывать её модели бессмысленно."""
+
+        phrase = (phrase or "").strip()
+        if not phrase or not self.enabled or self._client is None:
+            return NameSearch(answered=False)
+        data = await self.raw_filter({"medProductName": phrase}, size=size,
+                                     cache_key=f"agent:{_norm(phrase)}")
+        if data is None:
+            return NameSearch(answered=False)
+        total = data.get("totalElements")
+        total = total if isinstance(total, int) else None
+        if total is not None and total > TOO_BROAD:
+            return NameSearch(total=total, too_broad=True)
+        return NameSearch(items=data.get("content") or [], total=total)
+
+    async def confirm_number(self, ru_number: str) -> Optional[RznRecord]:
+        """Проверка номера, названного ИИ: запись существует, номер совпадает
+        посимвольно, и производитель под ним один. Счётчики поиска по контракту
+        сюда не идут — это другой источник, и путать их в сводке нельзя."""
+
+        ru_number = (ru_number or "").strip()
+        if not ru_number or not self.enabled or self._client is None:
+            return None
+        ans = await self._query("noRu", ru_number, size=NUMBER_PAGE)
+        if not ans.answered or not ans.complete:
+            return None
+        items = keep_same_number(ans.items, ru_number)
+        if not items:
+            return None
+        producers = {producer_key((it.get("producer") or {}).get("name") or "")
+                     for it in items}
+        producers.discard("")
+        if len(producers) > 1:
+            return None
+        return self._record(items[0], "ai", 1.0)
 
     @staticmethod
     def _record(item: dict, match: str, score: float,

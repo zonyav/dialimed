@@ -1,0 +1,372 @@
+"""Агентный поиск производителя по реестру Росздравнадзора.
+
+Модель здесь **не источник фактов**. Она умеет одно: придумывать запросы к
+реестру и, найдя подходящую запись, назвать её номер РУ и дословную цитату.
+Цитату сверяет программа, номер перезапрашивается в реестре, а производитель,
+держатель и ИНН берутся из ответа реестра — не из слов модели. Не прошла хоть
+одна проверка — ячейка остаётся пустой.
+
+Почему именно так: выбор из готового среза по коду вида упирается в потолок —
+в 37% случаев нужной записи в срезе нет вообще, и там модель либо молчит, либо
+выдумывает. Свободный поиск по всему реестру дал 97–98% попаданий на двух
+независимых наборах КТРУ.
+
+Модуль ничего не делает, пока пользователь не включит ИИ и не введёт свой ключ.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import logging
+import re
+import sqlite3
+import time
+from dataclasses import dataclass
+from typing import Awaitable, Callable, Optional
+
+import httpx
+
+from ..config import settings
+
+log = logging.getLogger(__name__)
+
+# Промпт даёт те самые 97–98%: он объясняет, что поиск идёт по вхождению
+# подстроки в наименование, и что артикул в реестре не ищется. Правки здесь
+# меняют точность — их надо перемерять, а не вносить на глаз.
+PROMPT = """Ты определяешь производителя медизделия по тексту позиции из госконтракта.
+У тебя есть поиск по реестру регистрационных удостоверений Росздравнадзора.
+Поиск идёт по НАИМЕНОВАНИЮ изделия в реестре, по вхождению подстроки.
+
+Отвечай ТОЛЬКО одним JSON-объектом, без пояснений:
+  {"поиск": "строка"} — сделать запрос к реестру;
+  {"ответ": "<номер РУ из найденной записи>", "цитата": "<кусок записи реестра,
+   дословно, который доказывает совпадение>", "уверенность": "высокая|средняя|низкая"}
+  {"ответ": null, "почему": "коротко"} — если доказательства нет.
+
+Как искать:
+- поиск идёт по ТОЧНОМУ вхождению подстроки, поэтому ищи КОРОТКИЕ куски:
+  одно-два слова, без кавычек, скобок, ® и «»; длинная фраза почти всегда даёт ноль;
+- в реестре изделие называется по-своему: «Трубки оптические», «Инструменты
+  эндоскопические», «Эндоскопы жесткие» — пробуй такие формы, а не слово из КТРУ;
+- хорошо ищется товарный знак и название линейки (EndoGlance, Arthrex, ЭлеПС);
+- запрос из одного общего слова вернёт слишком много — уточняй;
+- артикул (Т01-100-320-30) в поиске НЕ находится: он спрятан в вариантах
+  исполнения. Найди изделие по названию, а артикул сверь в самой записи.
+Внимание: в реестре и в контракте одно и то же может писаться по-разному —
+буква «О» вместо нуля, латиница вместо кириллицы.
+
+Отвечай номером РУ только тогда, когда в записи есть то, что названо
+в контракте: артикул, товарный знак, линейка или сам завод. Совпадение вида
+изделия доказательством НЕ является. Пустой ответ лучше неверного."""
+
+SPECS_CHARS = 400
+VARIANTS_CHARS = 700
+MAX_TOKENS = 700
+SOURCE = "ИИ + реестр РЗН"
+
+
+@dataclass(slots=True)
+class AiAnswer:
+    """Что модель ответила про одну позицию, до всяких проверок."""
+
+    ru_number: str = ""
+    quote: str = ""
+    confidence: str = ""
+    why: str = ""
+    steps: int = 0
+    error: str = ""
+
+    @property
+    def answered(self) -> bool:
+        return bool(self.ru_number)
+
+
+# ── чистые проверки: их можно гонять без сети ───────────────────────────────
+
+def flat(s: str) -> str:
+    """Текст без всего, что мешает сравнению: регистр, ё, кавычки, ®, дефисы."""
+
+    s = (s or "").lower().replace("ё", "е")
+    return re.sub(r"\s+", " ", re.sub(r"[^0-9a-zа-я]+", " ", s)).strip()
+
+
+def record_text(rec) -> str:
+    """Вся запись реестра одной строкой — по ней сверяется цитата: наименование,
+    варианты исполнения, номер, завод и держатель."""
+
+    return " ".join(str(getattr(rec, name, "") or "") for name in
+                    ("ru_name", "models_description", "ru_number", "producer",
+                     "producer_eng", "declarant"))
+
+
+def quote_supported(quote: str, text: str) -> bool:
+    """Цитата должна найтись в самой записи. Слова короче четырёх букв не в
+    счёт — они совпадают у всего подряд; из длинных должна найтись хотя бы
+    половина. Именно эта проверка ловит выдумку."""
+
+    haystack = flat(text)
+    if not haystack:
+        return False
+    words = [w for w in flat(quote).split() if len(w) >= 4]
+    if not words:
+        needle = flat(quote)
+        return bool(needle) and needle in haystack
+    hits = sum(1 for w in words if w in haystack)
+    return hits * 2 >= len(words)
+
+
+def mask_number(text: str, number: str) -> str:
+    """Прячет номер РУ из текста позиции — так строка с известным ответом
+    превращается в проверочную задачу для самопроверки прогона."""
+
+    if not number:
+        return text
+    body = re.sub(r"^\s*(?:ФСР|ФС|РЗН|ЕРУЛ|РД)\s*", "", number, flags=re.I).strip()
+    out = text
+    for piece in (number, body):
+        if len(piece) >= 4:
+            out = re.sub(re.escape(piece), "…", out, flags=re.I)
+    return out
+
+
+def parse_reply(raw: str) -> dict:
+    """Ответ модели — один JSON-объект. Иногда он приходит в ```-заборе или с
+    пояснением вокруг, поэтому берём первый объект, а не весь текст."""
+
+    s = (raw or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", s).strip()
+    start, depth = s.find("{"), 0
+    if start < 0:
+        return {}
+    for i in range(start, len(s)):
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(s[start:i + 1])
+                except json.JSONDecodeError:
+                    return {}
+                return obj if isinstance(obj, dict) else {}
+    return {}
+
+
+def question(text: str, specs: str = "") -> str:
+    """Всё, что модель видит о позиции: текст из контракта и характеристики."""
+
+    parts = [text.strip()]
+    if specs:
+        parts.append("Характеристики: " + specs[:SPECS_CHARS])
+    return "\n".join(p for p in parts if p)
+
+
+def _found(search) -> str:
+    """Выдача реестра для модели: только то, по чему она может судить."""
+
+    if not search.answered:
+        return json.dumps({"ошибка": "реестр не ответил"}, ensure_ascii=False)
+    if search.too_broad:
+        return json.dumps({"ошибка": "слишком общий запрос, уточните",
+                           "найдено": search.total}, ensure_ascii=False)
+    records = []
+    for it in search.items:
+        prod = it.get("producer") or {}
+        decl = it.get("declarant") or {}
+        records.append({
+            "РУ": it.get("noRu") or "",
+            "наименование": it.get("name") or "",
+            "производитель": prod.get("name") or "",
+            "держатель": decl.get("name") or "",
+            "варианты исполнения": (it.get("modelsDescription") or "")[:VARIANTS_CHARS],
+        })
+    return json.dumps({"найдено": search.total if search.total is not None
+                       else len(records), "записи": records}, ensure_ascii=False)
+
+
+# ── диалог ─────────────────────────────────────────────────────────────────
+
+Ask = Callable[[list[dict]], Awaitable[str]]
+Search = Callable[[str], Awaitable[object]]
+
+
+async def identify(text: str, ask: Ask, search: Search,
+                   *, max_steps: int = 0) -> AiAnswer:
+    """Цикл «запрос → выдача → ответ». Шаги ограничены: без предела модель
+    способна перебирать формулировки бесконечно, а платим мы за каждый."""
+
+    steps = max_steps or settings.ai_steps
+    messages = [{"role": "system", "content": PROMPT},
+                {"role": "user", "content": text}]
+    for step in range(1, steps + 1):
+        try:
+            raw = await ask(messages)
+        except Exception as e:                      # шлюз недоступен или ответил ошибкой
+            log.debug("шлюз ИИ: %s: %s", type(e).__name__, e)
+            return AiAnswer(steps=step, error=f"{type(e).__name__}: {e}")
+        reply = parse_reply(raw)
+        if not reply:
+            return AiAnswer(steps=step, error="ответ модели не разобран")
+        if reply.get("поиск"):
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "user",
+                             "content": _found(await search(str(reply["поиск"])))})
+            continue
+        number = reply.get("ответ")
+        if not number:
+            return AiAnswer(steps=step, why=str(reply.get("почему") or ""))
+        return AiAnswer(ru_number=str(number).strip(),
+                        quote=str(reply.get("цитата") or ""),
+                        confidence=str(reply.get("уверенность") or ""),
+                        steps=step)
+    return AiAnswer(steps=steps, why="не уложился в отведённые шаги")
+
+
+# ── шлюз ───────────────────────────────────────────────────────────────────
+
+class Gateway:
+    """Обращение к шлюзу, совместимому с OpenAI. Без SDK: одна библиотека
+    httpx уже в сборке, а лишний пакет — это лишние мегабайты в exe.
+
+    Прокси httpx подхватывает из окружения сам: прямого доступа к шлюзу из
+    России нет, и без прокси все запросы честно упадут с внятной ошибкой."""
+
+    def __init__(self, key: str, model: str, base: str, *,
+                 timeout: float = 0.0, concurrency: int = 0):
+        self.key = re.sub(r"^bearer\s+", "", (key or "").strip(), flags=re.I)
+        self.model = model or settings.ai_model
+        self.base = (base or settings.ai_base).rstrip("/")
+        self.timeout = timeout or settings.ai_timeout
+        self._sem = asyncio.Semaphore(concurrency or settings.ai_concurrency)
+        self._client: Optional[httpx.AsyncClient] = None
+        self.calls = 0
+        # ключ уезжает в заголовок HTTP, а туда пролезает только латиница:
+        # кириллица в нём роняла запрос вместо внятного ответа
+        self.problem = ""
+        if not self.key:
+            self.problem = "Ключ не задан."
+        elif not self.key.isascii():
+            self.problem = ("В ключе есть русские буквы — скорее всего он "
+                            "скопирован не целиком или вместе с лишним текстом.")
+
+    async def __aenter__(self) -> "Gateway":
+        if not self.problem:
+            self._client = httpx.AsyncClient(
+                base_url=self.base,
+                headers={"Authorization": f"Bearer {self.key}",
+                         "Content-Type": "application/json"},
+                timeout=httpx.Timeout(self.timeout, connect=20.0),
+            )
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def ask(self, messages: list[dict]) -> str:
+        """Один вопрос модели. На прогонах 5–10% запросов падали и проходили
+        со второй попытки — поэтому повтор, а не отказ с первого раза."""
+
+        if self._client is None:
+            raise RuntimeError(self.problem or "ключ для ИИ не задан")
+        body = {"model": self.model, "messages": messages,
+                "temperature": 0, "max_tokens": MAX_TOKENS}
+        last = ""
+        async with self._sem:
+            for attempt in range(3):
+                try:
+                    r = await self._client.post("/chat/completions", json=body)
+                    r.raise_for_status()
+                    self.calls += 1
+                    data = r.json()
+                    return (((data.get("choices") or [{}])[0].get("message") or {})
+                            .get("content") or "")
+                except Exception as e:
+                    last = f"{type(e).__name__}: {e}"
+                    log.debug("шлюз ИИ, попытка %d: %s", attempt + 1, last)
+                    if attempt < 2:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(last or "шлюз не ответил")
+
+    async def probe(self) -> tuple[bool, str]:
+        """Кнопка «Проверить» на странице: работает ли ключ прямо сейчас."""
+
+        if self.problem:
+            return False, self.problem
+        try:
+            await self.ask([{"role": "user", "content": "Ответь одним словом: готов"}])
+        except Exception as e:
+            text = str(e)
+            if "401" in text or "403" in text:
+                return False, ("Шлюз не принял ключ. Проверьте, что он скопирован "
+                               "целиком и на счёте есть деньги.")
+            if "ConnectError" in text or "ConnectTimeout" in text or "Proxy" in text:
+                return False, ("Шлюз недоступен. Из России он открывается только "
+                               "через прокси: включите его и попробуйте снова.")
+            return False, f"Шлюз ответил ошибкой: {text[:200]}"
+        return True, f"Ключ работает, модель {self.model} отвечает."
+
+
+# ── кэш ответов модели ─────────────────────────────────────────────────────
+
+class AiCache:
+    """Ответы модели на диске: повторный прогон по тем же позициям бесплатен
+    и, что важнее, повторяем — иначе отчёт нельзя было бы воспроизвести."""
+
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self._lock = asyncio.Lock()
+        self._db: Optional[sqlite3.Connection] = None
+        db = self._conn()
+        db.execute("""CREATE TABLE IF NOT EXISTS ai (
+                          key TEXT PRIMARY KEY, payload TEXT, ts INTEGER)""")
+        db.commit()
+
+    def _conn(self) -> sqlite3.Connection:
+        if self._db is None:
+            self._db = sqlite3.connect(self.db_path, check_same_thread=False)
+        return self._db
+
+    def close(self) -> None:
+        if self._db is not None:
+            self._db.close()
+            self._db = None
+
+    @staticmethod
+    def _key(model: str, text: str) -> str:
+        return hashlib.sha1(f"{model}\x00{text}".encode("utf-8")).hexdigest()
+
+    async def get(self, model: str, text: str) -> Optional[AiAnswer]:
+        async with self._lock:
+            return await asyncio.to_thread(self._get, model, text)
+
+    def _get(self, model: str, text: str) -> Optional[AiAnswer]:
+        row = self._conn().execute("SELECT payload FROM ai WHERE key=?",
+                                   (self._key(model, text),)).fetchone()
+        if not row:
+            return None
+        try:
+            data = json.loads(row[0])
+        except json.JSONDecodeError:
+            return None
+        return AiAnswer(**{k: data.get(k, "") for k in
+                           ("ru_number", "quote", "confidence", "why")},
+                        steps=int(data.get("steps") or 0))
+
+    async def put(self, model: str, text: str, answer: AiAnswer) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._put, model, text, answer)
+
+    def _put(self, model: str, text: str, answer: AiAnswer) -> None:
+        payload = {"ru_number": answer.ru_number, "quote": answer.quote,
+                   "confidence": answer.confidence, "why": answer.why,
+                   "steps": answer.steps}
+        db = self._conn()
+        db.execute("INSERT OR REPLACE INTO ai(key, payload, ts) VALUES (?,?,?)",
+                   (self._key(model, text),
+                    json.dumps(payload, ensure_ascii=False), int(time.time())))
+        db.commit()

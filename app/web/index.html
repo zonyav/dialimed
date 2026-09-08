@@ -397,6 +397,41 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
 
     <div class="sect">Стадии контрактов</div>
     <div class="stack" id="stages"></div>
+
+    <div class="sect">Поиск через ИИ</div>
+    <label class="chk"><input type="checkbox" id="useAi"> Искать производителя
+      через ИИ</label>
+    <div class="stack" style="margin-top:10px">
+      <button id="aiSetup" class="quiet small" type="button">Как это включить</button>
+      <span class="hint" id="aiHint" style="margin:0;flex:1;min-width:170px"></span>
+    </div>
+    <div id="aiPanel" class="hidden" style="margin-top:14px">
+      <div class="note"><b>Что это такое</b>
+        Программа спрашивает ИИ только о тех строках, где производителя не удалось
+        определить обычным путём. Завод ИИ не называет: он ищет изделие в реестре
+        Росздравнадзора и приводит цитату из найденной записи. Цитату программа
+        сверяет с реестром, а производителя, держателя и ИНН берёт оттуда же —
+        не со слов ИИ. Выходит около 15 копеек и +7 минут на прогон.</div>
+      <div class="note"><b>Что нужно настроить один раз</b>
+        1. Завести ключ на шлюзе api.odirouter.ai и положить на счёт немного денег.<br>
+        2. Включить прокси — из России шлюз напрямую не открывается.<br>
+        3. Вставить ключ в поле ниже, сохранить и нажать «Проверить».</div>
+      <label for="aiKey">Ключ шлюза</label>
+      <input type="password" id="aiKey" placeholder="вставьте ключ и нажмите «Сохранить»"
+             autocomplete="off" spellcheck="false">
+      <div class="hint" id="aiKeyHint"></div>
+      <div class="sect">Модель</div>
+      <div class="stack" id="aiModels"></div>
+      <div class="stack" style="margin-top:14px">
+        <button id="aiSave" class="quiet small" type="button">Сохранить ключ</button>
+        <button id="aiCheck" class="quiet small" type="button">Проверить</button>
+        <span class="hint" id="aiCheckHint" style="margin:0;flex:1;min-width:170px"></span>
+      </div>
+      <div class="note warn"><b>О чём стоит знать</b>
+        Текст позиций уходит на сторонний сервис. Это открытые данные госзакупок,
+        но решение ваше. Ключ лежит на этом компьютере в обычном файле. Без ключа,
+        без интернета и со снятой галочкой программа работает ровно как раньше.</div>
+    </div>
    </div>
 
     <div class="stack full" style="margin-top:28px">
@@ -692,8 +727,62 @@ function params(){
     date_to: $('#to').value.trim(),
     stages: stagesPicked(),
     limit_per_ktru: Number($('#limit').value || 0),
+    use_ai: $('#useAi').checked && AI.has_key,
   };
 }
+
+/* ── поиск через ИИ ─────────────────────────────────────────────── */
+
+let AI = {enabled: false, has_key: false, model: '', models: [], from_env: false};
+
+function renderAi(){
+  $('#useAi').checked = !!(AI.enabled && AI.has_key);
+  $('#useAi').disabled = !AI.has_key;
+  $('#aiHint').textContent = AI.has_key
+    ? ('ключ задан' + (AI.key_tail ? ' (…' + AI.key_tail + ')' : '') +
+       ', модель ' + AI.model)
+    : 'без ключа не работает — программа тогда ищет как раньше';
+  $('#aiKeyHint').textContent = AI.from_env
+    ? 'ключ задан переменной MI_AI_KEY — поле выше её не перебьёт'
+    : 'хранится на этом компьютере, рядом с данными программы';
+  $('#aiModels').innerHTML = (AI.models || []).map(m =>
+    '<label class="chk"><input type="radio" name="aimodel" value="' + esc(m.id) + '"' +
+    (m.id === AI.model ? ' checked' : '') + '> ' + esc(m.id) +
+    ' <span class="hint" style="margin:0">— ' + esc(m.note) + '</span></label>').join('');
+  $$('#aiModels input').forEach(i => i.onchange = () => saveAi({model: i.value}));
+}
+
+async function loadAi(){
+  try{ AI = await api('/api/ai'); }catch(e){}
+  renderAi();
+}
+
+async function saveAi(patch){
+  try{ AI = await post('/api/ai', patch); }
+  catch(e){ toast('Не удалось сохранить: ' + e.message, true); }
+  renderAi();
+}
+
+$('#aiSetup').onclick = () => $('#aiPanel').classList.toggle('hidden');
+$('#useAi').onchange = () => saveAi({enabled: $('#useAi').checked});
+$('#aiSave').onclick = () => {
+  const key = $('#aiKey').value.trim();
+  if(!key){ toast('Вставьте ключ в поле', true); return; }
+  $('#aiKey').value = '';
+  saveAi({key: key});
+};
+$('#aiCheck').onclick = async () => {
+  const btn = $('#aiCheck');
+  btn.disabled = true;
+  $('#aiCheckHint').textContent = 'спрашиваю шлюз…';
+  try{
+    const r = await post('/api/ai/check', {});
+    $('#aiCheckHint').textContent = r.message || (r.ok ? 'работает' : 'не работает');
+  }catch(e){
+    $('#aiCheckHint').textContent = 'не получилось: ' + e.message;
+  }
+  btn.disabled = false;
+};
 
 /* ── проверка кодов ─────────────────────────────────────────────── */
 
@@ -812,11 +901,16 @@ const STEP_NAMES = [
   ['НМЦК', 'Начальные цены закупок'],
   ['РЗН', 'Реестр Росздравнадзора'],
   ['вид', 'Срез реестра по коду вида'],
+  ['ИИ', 'Поиск производителя через ИИ'],
 ];
 let stepDone = new Set();
+/* шаг «ИИ» показываем только там, где он действительно будет: иначе список
+   заканчивается пунктом, который никогда не отметится */
+let RUN_AI = false;
 
 function renderSteps(active){
-  $('#steps').innerHTML = STEP_NAMES.map(([key, title]) => {
+  $('#steps').innerHTML = STEP_NAMES.filter(
+      ([key]) => key !== 'ИИ' || RUN_AI).map(([key, title]) => {
     const done = stepDone.has(key);
     const now = key === active;
     return '<li class="' + (done ? 'done' : (now ? 'now' : '')) + '">' +
@@ -873,6 +967,7 @@ async function startRun(){
   $('#go').disabled = true;
   try{
     const res = await post('/api/run', p);
+    RUN_AI = !!p.use_ai;
     $('#alerts').innerHTML = '';
     collapseForm(queryNote(p));
     attach(res.job);
@@ -1449,10 +1544,12 @@ $('#quit').onclick = async () => {
 async function boot(){
   heartbeat();
   loadStatus().catch(() => lost());
+  loadAi();
   loadReports();
   try{
     const cur = await api('/api/current');
     if(cur.job){
+      RUN_AI = (cur.note || '').indexOf('через ИИ') >= 0;
       $('#ctx').textContent = cur.note || '';
       collapseForm(cur.note || 'идёт прогон');
       attach(cur.job);

@@ -186,6 +186,9 @@ def main() -> int:
     ap.add_argument("--to", dest="date_to", default="", help="дата заключения по (ДД.ММ.ГГГГ)")
     ap.add_argument("--stages", default=",".join(DEFAULT_STAGES),
                     help="стадии контракта: " + "; ".join(f"{k}={v}" for k, v in STAGES.items()))
+    ap.add_argument("--ai", action="store_true",
+                    help="искать производителя через ИИ там, где правила молчат "
+                         "(нужен ключ, см. веб-интерфейс)")
     ap.add_argument("--limit", type=int, default=0,
                     help="максимум контрактов на один код КТРУ (0 — без ограничения)")
     ap.add_argument("--out", "-o", help="путь к файлу отчёта .xlsx")
@@ -249,6 +252,7 @@ def main() -> int:
         date_to=args.date_to,
         stages=[s.strip() for s in args.stages.split(",") if s.strip()],
         limit_per_ktru=max(0, args.limit),
+        use_ai=args.ai,
     )
 
     print("\n  Коды КТРУ:", ", ".join(codes))
@@ -290,6 +294,13 @@ def main() -> int:
         print(f"  Срез по коду вида    : совпало {kind['совпало по правилам']}"
               f" · видов {kind.get('видов', 0)}, "
               f"записей {kind.get('записей в срезах', 0)}")
+    ai = (result.stats or {}).get("ИИ")
+    if isinstance(ai, dict):
+        line = f"  Поиск через ИИ       : заполнено {ai.get('заполнено строк', 0)}"
+        if ai.get("проверок"):
+            line += (f" · проверен на {ai['проверок']} позициях, "
+                     f"точность {ai.get('точность', '—')}")
+        print(line)
     if result.problems:
         print(f"  Замечаний при разборе: {len(result.problems)}")
         for p in result.problems[:5]:

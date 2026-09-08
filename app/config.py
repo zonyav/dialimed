@@ -82,6 +82,15 @@ class Settings:
     kind_slice_enabled: bool = _bool("MI_KIND_SLICE", True)
     kind_slice_max: int = _int("MI_KIND_SLICE_MAX", 1200)
 
+    # ИИ выключен, пока пользователь не включит его сам и не введёт свой ключ.
+    # Ключ живёт в data/ai.json, рядом с остальными данными, и в репозиторий
+    # не попадает никогда; переменная окружения перебивает файл.
+    ai_base: str = os.environ.get("MI_AI_BASE", "") or "https://api.odirouter.ai/v1"
+    ai_model: str = os.environ.get("MI_AI_MODEL", "") or "gemini-3.7-flash"
+    ai_timeout: float = _flt("MI_AI_TIMEOUT", 60.0)
+    ai_concurrency: int = _int("MI_AI_CONCURRENCY", 4)
+    ai_steps: int = _int("MI_AI_STEPS", 6)
+
     idle_hours: float = _flt("MI_IDLE_HOURS", 6.0)
 
     cache_enabled: bool = _bool("MI_CACHE_ENABLED", True)
@@ -105,6 +114,62 @@ class Settings:
 
 
 settings = Settings()
+
+AI_FILE = DATA / "ai.json"
+
+# Что предлагать в списке моделей. Цифры — из замеров на двух наборах КТРУ
+# (эндоскопы и 18 кодов пользователя), а не из описания моделей.
+AI_MODELS: list[dict] = [
+    {"id": "gemini-3.7-flash", "note": "точность 98%, около 15 копеек за прогон"},
+    {"id": "gemini-3.1-flash-lite", "note": "в пять раз дешевле, точность 90%"},
+]
+
+
+def ai_options() -> dict:
+    """Ключ, модель и адрес шлюза: сначала файл рядом с данными, поверх него —
+    переменные окружения. Ключ в репозиторий не попадает и в exe не зашит."""
+
+    import json
+
+    saved: dict = {}
+    try:
+        saved = json.loads(AI_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    return {
+        "key": os.environ.get("MI_AI_KEY") or str(saved.get("key") or ""),
+        "model": os.environ.get("MI_AI_MODEL") or str(saved.get("model") or "")
+        or settings.ai_model,
+        "base": os.environ.get("MI_AI_BASE") or str(saved.get("base") or "")
+        or settings.ai_base,
+        "enabled": bool(saved.get("enabled")),
+    }
+
+
+def save_ai_options(*, key: str | None = None, model: str | None = None,
+                    enabled: bool | None = None) -> dict:
+    """Сохраняет то, что задал пользователь. Пустой ключ стирает сохранённый —
+    это единственный способ убрать его из файла, кроме удаления файла."""
+
+    import json
+
+    try:
+        saved = json.loads(AI_FILE.read_text(encoding="utf-8"))
+        if not isinstance(saved, dict):
+            saved = {}
+    except (OSError, ValueError):
+        saved = {}
+    if key is not None:
+        saved["key"] = key.strip()
+    if model is not None:
+        saved["model"] = model.strip()
+    if enabled is not None:
+        saved["enabled"] = bool(enabled)
+    AI_FILE.write_text(json.dumps(saved, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+    return ai_options()
 
 STAGES: dict[str, str] = {
     "0": "Исполнение",
