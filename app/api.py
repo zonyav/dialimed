@@ -972,6 +972,7 @@ async def ai_state() -> dict:
         "enabled": opts["enabled"],
         "has_key": bool(key),
         "key_tail": key[-4:] if len(key) > 4 else "",
+        "protected": opts["protected"],
         "from_env": bool(os.environ.get("MI_AI_KEY")),
         "model": opts["model"],
         "base": opts["base"],

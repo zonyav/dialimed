@@ -4,6 +4,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 def _base_dir() -> Path:
@@ -83,8 +84,8 @@ class Settings:
     kind_slice_max: int = _int("MI_KIND_SLICE_MAX", 1200)
 
     # ИИ выключен, пока пользователь не включит его сам и не введёт свой ключ.
-    # Ключ живёт в data/ai.json, рядом с остальными данными, и в репозиторий
-    # не попадает никогда; переменная окружения перебивает файл.
+    # Ключ живёт в data/ai.json, зашифрованный средствами Windows (см. _dpapi),
+    # в репозиторий не попадает никогда; переменная окружения перебивает файл.
     ai_base: str = os.environ.get("MI_AI_BASE", "") or "https://api.odirouter.ai/v1"
     ai_model: str = os.environ.get("MI_AI_MODEL", "") or "gemini-3.7-flash"
     ai_timeout: float = _flt("MI_AI_TIMEOUT", 60.0)
@@ -125,50 +126,130 @@ AI_MODELS: list[dict] = [
 ]
 
 
-def ai_options() -> dict:
-    """Ключ, модель и адрес шлюза: сначала файл рядом с данными, поверх него —
-    переменные окружения. Ключ в репозиторий не попадает и в exe не зашит."""
+def _dpapi(name: str, data: bytes) -> Optional[bytes]:
+    """Шифрование средствами самой Windows (DPAPI): ключ, зашифрованный так,
+    расшифровывается только под этой учётной записью и на этой машине. Ни
+    пароля, ни своего хранилища заводить не нужно, и в сборку не добавляется
+    ни одной библиотеки. Не Windows или отказ — возвращаем None, и вызывающий
+    сохраняет как есть: программа без ключа полезнее программы с ошибкой."""
 
+    if sys.platform != "win32" or not data:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class Blob(ctypes.Structure):
+            _fields_ = [("cbData", wintypes.DWORD),
+                        ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+        source = Blob(len(data),
+                      ctypes.cast(ctypes.create_string_buffer(data),
+                                  ctypes.POINTER(ctypes.c_char)))
+        out = Blob()
+        # UI_FORBIDDEN: у программы может не быть окна, и запрос от Windows
+        # повис бы невидимым диалогом
+        ok = getattr(ctypes.windll.crypt32, name)(
+            ctypes.byref(source), None, None, None, None, 0x1, ctypes.byref(out))
+        if not ok:
+            return None
+        try:
+            return ctypes.string_at(out.pbData, out.cbData)
+        finally:
+            ctypes.windll.kernel32.LocalFree(out.pbData)
+    except Exception:
+        return None
+
+
+def _lock_key(key: str) -> Optional[str]:
+    import base64
+
+    sealed = _dpapi("CryptProtectData", key.encode("utf-8"))
+    return base64.b64encode(sealed).decode("ascii") if sealed else None
+
+
+def _unlock_key(sealed: str) -> str:
+    import base64
+
+    try:
+        raw = base64.b64decode(sealed.encode("ascii"), validate=True)
+    except (ValueError, UnicodeEncodeError):
+        return ""
+    opened = _dpapi("CryptUnprotectData", raw)
+    return opened.decode("utf-8", "replace") if opened else ""
+
+
+def _read_ai_file() -> dict:
     import json
 
-    saved: dict = {}
     try:
         saved = json.loads(AI_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        saved = {}
-    if not isinstance(saved, dict):
-        saved = {}
+        return {}
+    return saved if isinstance(saved, dict) else {}
+
+
+def _write_ai_file(saved: dict) -> None:
+    import json
+
+    AI_FILE.write_text(json.dumps(saved, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+
+
+def ai_options() -> dict:
+    """Ключ, модель и адрес шлюза: сначала файл рядом с данными, поверх него —
+    переменные окружения. Ключ не попадает ни в репозиторий, ни в exe, ни в
+    отчёт, ни на страницу: единственный адрес, куда он уходит, — сам шлюз,
+    в заголовке запроса, иначе тот не ответит."""
+
+    saved = _read_ai_file()
+    key = str(saved.get("key") or "")
+    sealed = str(saved.get("key_protected") or "")
+    if sealed:
+        key = _unlock_key(sealed)
+    elif key:
+        # ключ из старой версии лежит открытым — запираем его при первом чтении
+        locked = _lock_key(key)
+        if locked:
+            saved.pop("key", None)
+            saved["key_protected"] = locked
+            try:
+                _write_ai_file(saved)
+            except OSError:
+                pass
     return {
-        "key": os.environ.get("MI_AI_KEY") or str(saved.get("key") or ""),
+        "key": os.environ.get("MI_AI_KEY") or key,
         "model": os.environ.get("MI_AI_MODEL") or str(saved.get("model") or "")
         or settings.ai_model,
         "base": os.environ.get("MI_AI_BASE") or str(saved.get("base") or "")
         or settings.ai_base,
         "enabled": bool(saved.get("enabled")),
+        "protected": bool(saved.get("key_protected")),
     }
 
 
 def save_ai_options(*, key: str | None = None, model: str | None = None,
                     enabled: bool | None = None) -> dict:
-    """Сохраняет то, что задал пользователь. Пустой ключ стирает сохранённый —
-    это единственный способ убрать его из файла, кроме удаления файла."""
+    """Сохраняет то, что задал пользователь: один раз ввёл — больше не спросят.
+    Пустой ключ стирает сохранённый — иначе убрать его можно только удалением
+    файла."""
 
-    import json
-
-    try:
-        saved = json.loads(AI_FILE.read_text(encoding="utf-8"))
-        if not isinstance(saved, dict):
-            saved = {}
-    except (OSError, ValueError):
-        saved = {}
+    saved = _read_ai_file()
     if key is not None:
-        saved["key"] = key.strip()
+        saved.pop("key", None)
+        saved.pop("key_protected", None)
+        key = key.strip()
+        if key:
+            locked = _lock_key(key)
+            if locked:
+                saved["key_protected"] = locked
+            else:
+                saved["key"] = key
     if model is not None:
         saved["model"] = model.strip()
     if enabled is not None:
         saved["enabled"] = bool(enabled)
-    AI_FILE.write_text(json.dumps(saved, ensure_ascii=False, indent=1),
-                       encoding="utf-8")
+    _write_ai_file(saved)
     return ai_options()
 
 STAGES: dict[str, str] = {

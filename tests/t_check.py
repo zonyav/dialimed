@@ -545,8 +545,35 @@ check("молчание — это не ответ",
 check("бесконечный поиск обрывается",
       _диалог(['{"поиск": "а"}'] * 12).why, "не уложился в отведённые шаги")
 
-print("\n ИИ в конвейере: ответы идут в отчёт только после самопроверки")
+print("\n ИИ: ключ вводят один раз, и лежит он зашифрованным")
+import tempfile
 import app.config as _cfg
+
+_БЫЛ_ФАЙЛ = _cfg.AI_FILE
+_cfg.AI_FILE = pathlib.Path(tempfile.gettempdir()) / "медизделия_ключ_проверка.json"
+try:
+    _cfg.AI_FILE.unlink(missing_ok=True)
+    _cfg.save_ai_options(key="sk-proverka-1234567890", enabled=True)
+    _НА_ДИСКЕ = _cfg.AI_FILE.read_text(encoding="utf-8")
+    check("второй раз ключ не спросят", _cfg.ai_options()["key"],
+          "sk-proverka-1234567890")
+    check("и галочку тоже помним", _cfg.ai_options()["enabled"], True)
+    if sys.platform == "win32":
+        check("в файле ключа открытым текстом нет",
+              "sk-proverka" in _НА_ДИСКЕ, False)
+        check("файл говорит, что ключ заперт", _cfg.ai_options()["protected"], True)
+        _cfg.AI_FILE.write_text('{"key": "sk-staryj-0987654321"}', encoding="utf-8")
+        check("ключ из старой версии читается",
+              _cfg.ai_options()["key"], "sk-staryj-0987654321")
+        check("и тут же запирается",
+              "sk-staryj" in _cfg.AI_FILE.read_text(encoding="utf-8"), False)
+    _cfg.save_ai_options(key="")
+    check("пустой ключ стирает сохранённый", _cfg.ai_options()["key"], "")
+finally:
+    _cfg.AI_FILE.unlink(missing_ok=True)
+    _cfg.AI_FILE = _БЫЛ_ФАЙЛ
+
+print("\n ИИ в конвейере: ответы идут в отчёт только после самопроверки")
 import app.pipeline as _pl
 from app.enrich import aimatch as _am
 from app.enrich.aimatch import question
