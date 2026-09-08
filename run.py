@@ -300,6 +300,8 @@ def main() -> int:
         if ai.get("проверок"):
             line += (f" · проверен на {ai['проверок']} позициях, "
                      f"точность {ai.get('точность', '—')}")
+        if ai.get("стоило"):
+            line += f" · стоило {ai['стоило']}"
         print(line)
     if result.problems:
         print(f"  Замечаний при разборе: {len(result.problems)}")

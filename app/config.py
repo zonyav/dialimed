@@ -90,7 +90,10 @@ class Settings:
     ai_model: str = os.environ.get("MI_AI_MODEL", "") or "gemini-3.7-flash"
     ai_timeout: float = _flt("MI_AI_TIMEOUT", 60.0)
     ai_concurrency: int = _int("MI_AI_CONCURRENCY", 4)
-    ai_steps: int = _int("MI_AI_STEPS", 6)
+    # шагов диалога на позицию. На живом прогоне девять позиций упёрлись в
+    # прежний предел 6; при 10 две из семи проверенных нашлись — а платим мы
+    # только за трудные, которых мало
+    ai_steps: int = _int("MI_AI_STEPS", 10)
 
     idle_hours: float = _flt("MI_IDLE_HOURS", 6.0)
 
@@ -118,12 +121,26 @@ settings = Settings()
 
 AI_FILE = DATA / "ai.json"
 
-# Что предлагать в списке моделей. Цифры — из замеров на двух наборах КТРУ
-# (эндоскопы и 18 кодов пользователя), а не из описания моделей.
+# Что предлагать в списке моделей. Точность — из замеров на двух наборах КТРУ
+# (эндоскопы и 18 кодов пользователя), а не из описания моделей. Цена за
+# миллион токенов — чтобы программа сама показывала, во что обошёлся прогон,
+# а не отсылала пользователя считать на сайт шлюза.
 AI_MODELS: list[dict] = [
-    {"id": "gemini-3.7-flash", "note": "точность 98%, около 15 копеек за прогон"},
-    {"id": "gemini-3.1-flash-lite", "note": "в пять раз дешевле, точность 90%"},
+    {"id": "gemini-3.7-flash", "note": "точность 98%, дороже",
+     "in": 0.225, "out": 1.125},
+    {"id": "gemini-3.1-flash-lite", "note": "в пять раз дешевле, точность 90%",
+     "in": 0.049, "out": 0.147},
 ]
+
+
+def ai_price(model: str) -> tuple[float, float]:
+    """Цена за миллион токенов, вход и выход. Ноль — модель незнакомая, и
+    стоимость прогона тогда просто не показывается: врать про деньги нельзя."""
+
+    for m in AI_MODELS:
+        if m["id"] == model:
+            return float(m.get("in") or 0), float(m.get("out") or 0)
+    return 0.0, 0.0
 
 
 def _dpapi(name: str, data: bytes) -> Optional[bytes]:

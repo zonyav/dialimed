@@ -24,7 +24,8 @@ from .enrich.nameparse import (COUNTRY_RE, DESCRIPTIVE_RE, ERUL_RE,
                                parse_name, pick_main_ru, quoted_marks,
                                variants_in_registry_name)
 from .enrich.verify import (OPF_TAIL, clean_company, company_key,
-                            company_keys, is_company_name, is_initialism)
+                            company_keys, is_company_name, is_initialism,
+                            same_company)
 from .enrich.rzn import RznEnricher
 from .models import ContractMeta, Position, Problem, Row, RunResult
 
@@ -398,14 +399,18 @@ def _note_registry_gaps(rows: list[Row], result: RunResult) -> None:
 # номер РУ написан в контракте, правильный ответ известен заранее — прячем номер
 # и смотрим, попадёт ли модель. Правила ломались на новых кодах молча; здесь
 # программа меряет себя на тех данных, которые пользователь считает сейчас.
-AI_MAX_CHECKS = 40          # больше не нужно: точность видна и на сорока
+# Проверка стоит столько же, сколько работа, поэтому проверочных задач берём
+# не больше, чем самой работы. Тридцать, а не двадцать пять: считаются не
+# задачи, а полученные ответы, и на живом прогоне двадцать пять задач дали
+# девятнадцать ответов — порог не сработал, хотя должен был.
+AI_MAX_CHECKS = 30
 AI_ENOUGH_CHECKS = 20       # меньше — судить не о чем, но и запрещать не за что
 AI_MIN_ACCURACY = 0.95
 AI_CODE_CHECKS = 10         # по отдельному коду хватает и десяти проверок,
 AI_CODE_ACCURACY = 0.90     # чтобы увидеть, что именно на нём ИИ не работает
 
 
-def _ai_check_tasks(rows: list[Row]) -> dict[str, tuple[str, str]]:
+def _ai_check_tasks(rows: list[Row], work: int = 0) -> dict[str, tuple[str, str]]:
     """Задачи с известным ответом: строки, где номер РУ написан в контракте и
     реестр по нему ответил. Берём поровну от каждого кода КТРУ — точность важно
     видеть по коду, а не в среднем по больнице."""
@@ -419,14 +424,14 @@ def _ai_check_tasks(rows: list[Row]) -> dict[str, tuple[str, str]]:
             continue
         text = question(mask_number(p.contract_text(), p.ru_number),
                         mask_number(p.specs_text, p.ru_number))
-        by_code.setdefault(p.ktru, {}).setdefault(
-            text, (company_key(p.manufacturer)[0], p.ktru))
+        by_code.setdefault(p.ktru, {}).setdefault(text, (p.manufacturer, p.ktru))
 
+    limit = min(AI_MAX_CHECKS, max(AI_ENOUGH_CHECKS, work)) if work else AI_MAX_CHECKS
     picked: dict[str, tuple[str, str]] = {}
     queues = [list(v.items()) for v in by_code.values()]
-    while len(picked) < AI_MAX_CHECKS and any(queues):
+    while len(picked) < limit and any(queues):
         for q in queues:
-            if not q or len(picked) >= AI_MAX_CHECKS:
+            if not q or len(picked) >= limit:
                 continue
             text, meta = q.pop()
             picked.setdefault(text, meta)
@@ -451,18 +456,27 @@ async def _enrich_by_ai(rows: list[Row], result: RunResult,
                        "прогон прошёл как обычно"))
         return
 
+    # Спрашиваем только там, где есть за что зацепиться. Позиция из одних
+    # общих слов КТРУ («Система электрохирургическая», и всё) не даёт модели
+    # ничего для поиска: на живом прогоне 27 таких вопросов из 66 не принесли
+    # ни одного ответа, а платить пришлось за каждый.
     todo: dict[str, list[Position]] = {}
+    пропущено = 0
     for r in rows:
         p = r.pos
         if p.manufacturer:
             continue
+        if not p.has_clue:
+            пропущено += 1
+            continue
         todo.setdefault(question(p.contract_text(), p.specs_text), []).append(p)
-    checks = _ai_check_tasks(rows)
-    texts = list(dict.fromkeys(list(todo) + list(checks)))
-    if not texts:
+    if not todo:
         return
+    checks = _ai_check_tasks(rows, len(todo))
+    texts = list(dict.fromkeys(list(todo) + list(checks)))
 
     stats = {"спрошено позиций": len(texts), "из них проверочных": len(checks),
+             "не о чем спрашивать": пропущено,
              "модель промолчала": 0, "цитата не подтвердилась": 0,
              "номер не подтверждён реестром": 0, "ошибок шлюза": 0,
              "заполнено строк": 0}
@@ -516,15 +530,22 @@ async def _enrich_by_ai(rows: list[Row], result: RunResult,
                     stats["цитата не подтвердилась"] += 1
                     continue
                 records[text] = rec
+            stats.update(gw.spent())
 
+    # Точность считаем только по ответам, которые программа действительно
+    # написала бы в отчёт. Молчание и отсев проверками ошибкой не считаются:
+    # ячейка от них не появляется, а гнать модель к ответу любой ценой —
+    # ровно то, чего мы от неё не хотим.
     checked: dict[str, list[int]] = {}
+    silent = 0
     for text, (want, code) in checks.items():
         rec = records.get(text)
         seen = checked.setdefault(code, [0, 0])
-        if text not in answers or answers[text].error:
+        if rec is None:
+            silent += 1
             continue
         seen[0] += 1
-        if rec is not None and company_key(rec.producer)[0] == want:
+        if same_company(rec.producer, want):
             seen[1] += 1
 
     total = sum(v[0] for v in checked.values())
@@ -544,6 +565,9 @@ async def _enrich_by_ai(rows: list[Row], result: RunResult,
             _apply_registry(p, rec, source=SOURCE)
             stats["заполнено строк"] += 1
 
+    if checks:
+        stats["проверочных позиций"] = len(checks)
+        stats["без ответа на проверке"] = silent
     if total:
         stats["проверок"] = total
         stats["из них верно"] = right

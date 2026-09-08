@@ -62,6 +62,11 @@ PROMPT = """Ты определяешь производителя медизд�
 изделия доказательством НЕ является. Пустой ответ лучше неверного."""
 
 SPECS_CHARS = 400
+# Выдача реестра — главный вес каждого шага: она уезжает модели заново при
+# каждом следующем вопросе. Резать её надо числом записей, а не их содержимым:
+# при 300 символах вариантов исполнения прогон подешевел, но нашёл на три
+# строки меньше — артикул подтверждается именно по этому перечню, и обрезанный
+# перечень заставляет модель молчать.
 VARIANTS_CHARS = 700
 MAX_TOKENS = 700
 SOURCE = "ИИ + реестр РЗН"
@@ -195,12 +200,23 @@ Search = Callable[[str], Awaitable[object]]
 
 async def identify(text: str, ask: Ask, search: Search,
                    *, max_steps: int = 0) -> AiAnswer:
-    """Цикл «запрос → выдача → ответ». Шаги ограничены: без предела модель
-    способна перебирать формулировки бесконечно, а платим мы за каждый."""
+    """Цикл «запрос → выдача → ответ».
+
+    Шагов не больше отведённого: платим мы за каждый, а каждый следующий
+    дороже предыдущего — вся переписка вместе с выдачей реестра уезжает
+    модели заново. Дороже всего обходятся диалоги, которые упираются в
+    предел, и они же не приносят ничего. Поэтому два предохранителя:
+
+    · повторный запрос — значит новых мыслей нет, и дальше будет то же;
+    · три пустых поиска подряд — искать больше нечем.
+
+    Оба обрывают диалог там, где он уже кончился, но продолжает стоить денег."""
 
     steps = max_steps or settings.ai_steps
     messages = [{"role": "system", "content": PROMPT},
                 {"role": "user", "content": text}]
+    asked: set[str] = set()
+    empty = 0
     for step in range(1, steps + 1):
         try:
             raw = await ask(messages)
@@ -211,9 +227,17 @@ async def identify(text: str, ask: Ask, search: Search,
         if not reply:
             return AiAnswer(steps=step, error="ответ модели не разобран")
         if reply.get("поиск"):
+            query = str(reply["поиск"])
+            key = flat(query)
+            if key in asked:
+                return AiAnswer(steps=step, why="повторяет прежний запрос")
+            asked.add(key)
+            found = await search(query)
+            empty = 0 if getattr(found, "items", None) else empty + 1
+            if empty >= 3:
+                return AiAnswer(steps=step, why="три поиска подряд впустую")
             messages.append({"role": "assistant", "content": raw})
-            messages.append({"role": "user",
-                             "content": _found(await search(str(reply["поиск"])))})
+            messages.append({"role": "user", "content": _found(found)})
             continue
         number = reply.get("ответ")
         if not number:
@@ -242,7 +266,11 @@ class Gateway:
         self.timeout = timeout or settings.ai_timeout
         self._sem = asyncio.Semaphore(concurrency or settings.ai_concurrency)
         self._client: Optional[httpx.AsyncClient] = None
+        # считаем запросы и токены: пользователь тратит свои деньги и вправе
+        # видеть, во что обошёлся прогон, не заходя на сайт шлюза
         self.calls = 0
+        self.tokens_in = 0
+        self.tokens_out = 0
         # ключ уезжает в заголовок HTTP, а туда пролезает только латиница:
         # кириллица в нём роняла запрос вместо внятного ответа
         self.problem = ""
@@ -283,6 +311,9 @@ class Gateway:
                     r.raise_for_status()
                     self.calls += 1
                     data = r.json()
+                    usage = data.get("usage") or {}
+                    self.tokens_in += int(usage.get("prompt_tokens") or 0)
+                    self.tokens_out += int(usage.get("completion_tokens") or 0)
                     return (((data.get("choices") or [{}])[0].get("message") or {})
                             .get("content") or "")
                 except Exception as e:
@@ -291,6 +322,20 @@ class Gateway:
                     if attempt < 2:
                         await asyncio.sleep(1.5 * (attempt + 1))
         raise RuntimeError(last or "шлюз не ответил")
+
+    def spent(self) -> dict:
+        """Во что обошёлся прогон. Цену берём из справочника моделей; для
+        незнакомой модели показываем только запросы и токены."""
+
+        from ..config import ai_price
+
+        out = {"запросов к ИИ": self.calls,
+               "токенов": self.tokens_in + self.tokens_out}
+        cin, cout = ai_price(self.model)
+        if cin or cout:
+            usd = (self.tokens_in * cin + self.tokens_out * cout) / 1_000_000
+            out["стоило"] = f"${usd:.2f}" if usd >= 0.01 else "меньше цента"
+        return out
 
     async def probe(self) -> tuple[bool, str]:
         """Кнопка «Проверить» на странице: работает ли ключ прямо сейчас."""

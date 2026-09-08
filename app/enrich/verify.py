@@ -196,6 +196,40 @@ def phonetic_close(a: str, b: str, threshold: float = 0.82) -> bool:
                for x in va for y in vb)
 
 
+def same_company(a: str, b: str) -> bool:
+    """Один ли это завод, записанный по-разному. Нужен там, где два названия
+    пришли из разных мест и надо решить, спор это или одно и то же.
+
+    Три случая, и все три встретились на живом прогоне: ключи совпали;
+    отличается только приписанная страна («Сателек САС» и «Сателек САС
+    Франция» — реестр так пишет производственные площадки); короткое —
+    аббревиатура длинного («ДЗМО» и «Досчатинский завод медицинского
+    оборудования»).
+
+    Чего здесь намеренно нет: вхождения одного названия в другое — «Медтехника»
+    и «Медтехника плюс» бывают разными фирмами; и транслитерации — «Диксион» и
+    «DIXION» разводит человек, а не программа."""
+
+    ka, kb = company_key(a)[0], company_key(b)[0]
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    ca, cb = company_key(_drop_country(a))[0], company_key(_drop_country(b))[0]
+    if ca and ca == cb:
+        return True
+    return is_initialism(a, b) or is_initialism(b, a)
+
+
+def _drop_country(name: str) -> str:
+    from .nameparse import COUNTRY_RE
+
+    words = (name or "").strip(" ,").split()
+    while words and COUNTRY_RE.match(words[-1].strip(" ,\"'«»()")):
+        words.pop()
+    return " ".join(words)
+
+
 def _core_words(name: str) -> list[str]:
     s = re.sub(r"^\s*(?:ООО|ОАО|ЗАО|АО|ПАО|НАО|УП|ЧП|ИП)\b\.?", " ",
                name or "", flags=re.I)
