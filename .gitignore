@@ -9,5 +9,6 @@ dist/
 release/
 app/_build.py
 
-# карта проекта для Claude Code — только для разработки
+# записи для Claude Code — только для разработки, в репозиторий не нужны
 CLAUDE.md
+ai-matching-plan.md
