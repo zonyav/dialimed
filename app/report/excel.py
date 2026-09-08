@@ -44,6 +44,11 @@ LINK_TEXT = "открыть в ЕИС"
 # через месяц после прогона по цвету уже не вспомнить, что он означал,
 # поэтому расшифровка висит примечанием на шапке «Производитель»
 LEGEND_COLUMN = "Производитель"
+
+# Сводка говорит «такие строки стоит просмотреть глазами», а найти их в файле
+# было нечем: цвет тут не годится — номер РУ взят из самого контракта, ячейка
+# по правилам белая. Поэтому примечание прямо в ячейке.
+MISMATCH_SOURCE = "реестр РЗН (наименование не совпало)"
 LEGEND = "\n".join((
     "Цвет ячейки:",
     "• без заливки — взято из реестра по номеру РУ, "
@@ -156,6 +161,18 @@ def _sheet_positions(ws: Worksheet, result: RunResult) -> None:
                 cell.fill = GUESS_FILL if clue else MISSING_FILL
             elif name == "Производитель" and not row.pos.from_contract_number:
                 cell.fill = GUESS_FILL
+
+        if row.pos.manufacturer_source == MISMATCH_SOURCE and row.pos.ru_registry_name:
+            cell = ws.cell(row=r, column=idx["Производитель"])
+            note = Comment("\n".join((
+                "Реестр называет это изделие иначе:",
+                row.pos.ru_registry_name[:300],
+                "",
+                "Производитель взят по номеру РУ из контракта. Стоит открыть "
+                "контракт и проверить, тот ли это номер.",
+            )), "Поиск медизделия")
+            note.width, note.height = 380, 150
+            cell.comment = note
 
         card = row.pos.rzn_url
         if card:

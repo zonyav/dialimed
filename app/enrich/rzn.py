@@ -566,7 +566,9 @@ class RznEnricher:
                     score, best = max(scored, key=lambda x: x[0])
                 best_name = best.get("name") or ""
                 kind_ok = not type_hints or _same_device_kind(best_name, type_hints)
-                name_ok = not ru_name or similarity(ru_name, best_name) >= RU_NAME_THRESHOLD
+                name_ok = (not ru_name
+                           or similarity(ru_name, best_name) >= RU_NAME_THRESHOLD
+                           or shares_mark(ru_name, best))
                 rec = self._record(best, "noRu", score, type_hints)
                 # Номер выписан в контракте дословно и совпал посимвольно,
                 # производитель под ним один — этого довольно. Реестр называет
@@ -628,6 +630,39 @@ class RznEnricher:
                 if rec is None and ({("noErul", q[4]), ("noRu", q[0]),
                                      ("medProductName", q[3])} & self._unanswered))
         return out
+
+
+def shares_mark(ru_name: str, item: dict) -> bool:
+    """Стоит ли одно и то же обозначение в наименовании из контракта и в записи
+    реестра. Довод сильнее похожести строк: реестр называет семейство («Камеры
+    холодильные медицинские "Бирюса"»), контракт — конкретную модель («Камера
+    холодильная медицинская "Бирюса 450S-R"»). По буквам это разные строки, по
+    смыслу — одно изделие, и предупреждать тут не о чем.
+
+    Замерено на прогоне: без этого признака «наименование не совпало» получали
+    22 позиции из 408, и двадцать из них — ровно этот случай. Предупреждение,
+    которое почти всегда ложное, читать перестают."""
+
+    listed = _norm(" ".join([item.get("name") or "",
+                             item.get("modelsDescription") or ""]))
+    if not listed:
+        return False
+    # реестр дописывает к тому же наименованию обозначение семейства:
+    # «Камеры холодильные медицинские» → «Камеры холодильные медицинские "Бирюса"»
+    from .nameparse import RU_NUMBER_RE
+    короткое = _norm(RU_NUMBER_RE.sub(" ", ru_name))
+    if len(короткое) >= 20 and короткое in listed:
+        return True
+    for token in distinctive_tokens(ru_name):
+        t = _norm(token)
+        if len(t) >= 4 and t in listed:
+            return True
+        # обозначение часто стоит в кавычках вместе с артикулом
+        # («Бирюса 450K-R»), а реестр называет одно семейство («Бирюса»)
+        for word in t.split():
+            if len(word) >= 5 and word in listed:
+                return True
+    return False
 
 
 def _same_device_kind(registry_name: str, hints: list[str]) -> bool:
