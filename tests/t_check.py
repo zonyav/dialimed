@@ -1355,6 +1355,30 @@ check("выбор без основания отбрасывается",
 check("выбор с основанием принимается",
       confirms(IDX, SLICE[1], "Little Doctor LD2", "", ""), True)
 
+print("\n товарный знак ищет завод, а не наименование")
+ЭНДО = [
+    RznRecord(producer='ООО "ЭСТЭН"', declarant='ООО "ЭСТЭН"',
+              ru_number="РЗН 2025/26155", status="Действует",
+              ru_name="Гистероскоп по ТУ 26.60.12-004-65500831-2024",
+              models_description="Гистероскоп с диаметром рабочей части 2,7 мм"),
+    RznRecord(producer="KARL STORZ SE & Co. KG", declarant="ООО КШТЭ ВОСТОК",
+              ru_number="Г004-00110-00/06169297", status="Действует",
+              ru_name="Гистероскоп жесткий HOPKINS с параллельным окуляром",
+              models_description="Тубус операционный, 30-0564-00"),
+]
+IDX_Э = build_index(ЭНДО, "Гистероскоп жесткий оптический")
+
+check("латинский знак находит кириллический завод",
+      match_rules(IDX_Э, "ESTEN", "ESTEN", "").record.ru_number, "РЗН 2025/26155")
+check("и кириллическое написание знака тоже",
+      match_rules(IDX_Э, "ЭСТЕН", "ЭСТЕН", "").record.ru_number, "РЗН 2025/26155")
+check("размер в признаки не идёт",
+      candidate_tokens(IDX_Э, "", "", "Эндоскоп d=2,7мм (исп.3)"), [])
+check("имя завода — ещё не доказательство самой регистрации",
+      match_rules(IDX_Э, "ESTEN", "ESTEN", "").strong, 0.0)
+check("артикул из контракта — доказательство",
+      match_rules(IDX_Э, "30-0564-00", "", "").strong > 0, True)
+
 from app.enrich.kindmatch import contradicts
 
 OMRON_M2 = ("Измерители артериального давления и частоты пульса автоматические "

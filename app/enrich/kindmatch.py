@@ -7,8 +7,19 @@ from dataclasses import dataclass, field
 
 from .rzn import (RznRecord, _norm, latinize, producer_key, similarity,
                   strong_tokens)
+from .textutil import is_measure
+from .verify import phonetic
 
 MAX_DOC_FREQ = 0.30
+
+# Товарный знак и завод пишутся в разных алфавитах: в контракте «ESTEN», в
+# реестре ООО «ЭСТЭН», в контракте «BISSINGER», в реестре «Гюнтер Биссингер
+# Медицинтехник ГмбХ». Побуквенная замена похожих начертаний (latinize) тут
+# бессильна — она визуальная, а не звуковая: «ЭСТЕН» превращается в «ЭCTEH».
+# Поэтому у названий завода есть второй, звуковой указатель: phonetic("ESTEN")
+# и phonetic("ЭСТЭН") — одно и то же «esten». Слова короче четырёх букв в него
+# не идут, иначе совпадать начнёт всё подряд.
+PHON_MIN = 4
 
 MIN_SCORE = 3.0
 
@@ -35,6 +46,11 @@ class Match:
     tokens: list[str] = field(default_factory=list)
     reason: str = ""
     rivals: int = 0
+    # очки за признак с цифрой, найденный в самой записи, а не в названии
+    # завода: артикул из контракта, сошедшийся с перечнем исполнений. Поиску
+    # по заводу без этого верить нельзя — совпадение одного имени завода
+    # означает лишь «где-то у этой фирмы», но не «вот эта регистрация»
+    strong: float = 0.0
 
     @property
     def ok(self) -> bool:
@@ -47,6 +63,7 @@ class SliceIndex:
     records: list[RznRecord] = field(default_factory=list)
     dev: list[str] = field(default_factory=list)
     firm: list[str] = field(default_factory=list)
+    firm_phon: list[set[str]] = field(default_factory=list)
     doc_freq: dict[str, int] = field(default_factory=dict)
     kind_words: set[str] = field(default_factory=set)
 
@@ -78,7 +95,9 @@ def build_index(records: list[RznRecord], kind_name: str = "",
         idx.kind_words.add(_token_key(kind_code))
     for r in idx.records:
         idx.dev.append(_flat(" ".join((r.ru_name, r.models_description))))
-        idx.firm.append(_flat(" ".join((r.producer, r.producer_eng, r.declarant))))
+        firm = " ".join((r.producer, r.producer_eng, r.declarant))
+        idx.firm.append(_flat(firm))
+        idx.firm_phon.append(phon_words(firm))
     for hay in idx.dev:
         for word in set(hay.split()):
             idx.doc_freq[word] = idx.doc_freq.get(word, 0) + 1
@@ -102,20 +121,38 @@ def candidate_tokens(idx: SliceIndex, *texts: str) -> list[str]:
             key = _token_key(t)
             if len(key.replace(" ", "")) < 3 or key in seen:
                 continue
-            if _BARE_NUMBER.match(key):
+            if _BARE_NUMBER.match(key) or is_measure(t):
                 continue
             if key in idx.kind_words:
                 continue
-            if _doc_freq(idx, key) > limit and not _in_any_firm(idx, key):
+            if _doc_freq(idx, key) > limit and not _in_any_firm(idx, key, _phon_key(t)):
                 continue
             seen.add(key)
             out.append(t)
     return out
 
 
-def _in_any_firm(idx: SliceIndex, key: str) -> bool:
+def phon_words(text: str) -> set[str]:
+    """Звуковые формы слов названия завода — по ним товарный знак из контракта
+    находит завод в реестре, как бы тот ни был записан."""
+
+    out = {phonetic(w) for w in re.findall(r"[A-Za-zА-Яа-яЁё]{4,}", text or "")}
+    return {w for w in out if len(w) >= PHON_MIN}
+
+
+def _phon_key(token: str) -> str:
+    """Звуковая форма токена. Считается по исходному написанию: latinize
+    заменяет кириллицу похожими латинскими буквами по начертанию, и после неё
+    «ЭСТЕН» звучит уже не так, как звучало."""
+
+    key = phonetic(token or "")
+    return key if len(key) >= PHON_MIN and not _HAS_DIGIT.search(key) else ""
+
+
+def _in_any_firm(idx: SliceIndex, key: str, phon: str = "") -> bool:
     needle = f" {key} "
-    return any(needle in hay for hay in idx.firm)
+    return any(needle in hay for hay in idx.firm) or bool(
+        phon and any(phon in words for words in idx.firm_phon))
 
 
 def _weight(token: str) -> float:
@@ -134,21 +171,24 @@ def match_rules(idx: SliceIndex, mark: str = "", trademark: str = "",
     if not tokens:
         return Match(reason="в тексте позиции нет признаков, различающих внутри вида")
 
+    phons = {t: _phon_key(t) for t in tokens}
     scores: list[_Score] = []
     for i in range(len(idx.records)):
         dev, firm = idx.dev[i], idx.firm[i]
         hit: list[str] = []
         strong = weak = firm_pts = 0.0
         for t in tokens:
-            key = f" {_token_key(t)} "
-            in_dev, in_firm = key in dev, key in firm
+            flat = _token_key(t)
+            key = f" {flat} "
+            in_dev = key in dev
+            in_firm = key in firm or bool(phons[t] and phons[t] in idx.firm_phon[i])
             if not (in_dev or in_firm):
                 continue
             hit.append(t)
             w = _weight(t)
             if in_firm:
                 firm_pts += w
-            elif _HAS_DIGIT.search(_token_key(t)):
+            elif _HAS_DIGIT.search(flat):
                 strong += w
             else:
                 weak += w
@@ -177,7 +217,8 @@ def match_rules(idx: SliceIndex, mark: str = "", trademark: str = "",
         return Match(reason="артикул в контракте не сходится с артикулом "
                             "в записи реестра — изделие зарегистрировано "
                             "под другим видом", tokens=tokens, score=pick.total)
-    return Match(record=chosen, score=pick.total, tokens=pick.hits)
+    return Match(record=chosen, score=pick.total, tokens=pick.hits,
+                 strong=pick.strong)
 
 
 _ARTICLE = re.compile(r"\b([a-zа-я]{3,6})\s?-\s?(\d{3,5})[a-zа-я0-9-]*\b")
