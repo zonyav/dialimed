@@ -381,6 +381,32 @@ def _marks_after(ru_marks, variants=""):
     return [r.pos.mark for r in rs]
 
 
+print("\n размер изделия — не обозначение")
+from app.enrich.textutil import is_measure
+from app.pipeline import _parse_names
+
+check("диаметр — это размер", is_measure("d=10мм"), True)
+check("длина с единицей — размер", is_measure("302 мм"), True)
+check("артикул размером не считаем", is_measure("30-0564-00"), False)
+check("модель с цифрой размером не считаем", is_measure("ЭВК-1"), False)
+check("голое число размером не считаем", is_measure("8989"), False)
+
+
+def _разбор(ru_name, trademark="", nkmi_name=""):
+    r = Row(ContractMeta(), Position(ru_name=ru_name, trademark=trademark,
+                                     nkmi_name=nkmi_name))
+    _parse_names([r])
+    return r.pos.mark
+
+
+check("вместо размера берётся товарный знак",
+      _разбор("Эндоскоп d=2,7мм (исп.3)", "ESTEN",
+              "Гистероскоп жесткий оптоволоконный"), "ESTEN")
+check("размер без знака обозначением не становится",
+      _разбор("Эндоскоп d=10мм (исп.3)", "", "Лапароскоп оптический жесткий"), "")
+check("настоящее обозначение остаётся на месте",
+      _разбор("Тонометр Armed YE660B", "Armed"), "Тонометр Armed YE660B")
+
 print("\n чистка обозначения")
 from app.pipeline import _tidy_one_mark
 

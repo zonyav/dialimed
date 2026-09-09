@@ -17,7 +17,7 @@ from .eis.html_parser import parse_print_form
 from .eis.nmck import fetch_nmck_many
 from .eis.search import search_ktru
 from .eis.xml_parser import parse_contract_xml
-from .enrich.textutil import articles, is_type_word
+from .enrich.textutil import articles, is_measure, is_type_word
 from .enrich.nameparse import (COUNTRY_RE, DESCRIPTIVE_RE, ERUL_RE,
                                extract_ru_numbers, extract_tu,
                                is_opf_only, is_plain_word, looks_like_mark,
@@ -272,7 +272,11 @@ def _type_hints(pos: Position) -> list[str]:
     return [h for h in (pos.ktru_name, pos.nkmi_name) if h]
 
 
-def _parse_names(rows: list[Row]) -> None:
+def _parse_names(rows: list[Row], result: RunResult | None = None) -> None:
+
+    from collections import Counter
+
+    dropped: Counter = Counter()
     for r in rows:
         p = r.pos
         hints = _type_hints(p)
@@ -295,12 +299,21 @@ def _parse_names(rows: list[Row]) -> None:
 
         p.mark = parts.full
         p.mark_source = "правила" if p.mark else ""
+        # размер обозначением не считается: «Эндоскоп d=10мм (исп.3)» — это не
+        # модель, а диаметр, и товарный знак рядом сказал бы куда больше
+        if p.mark and is_measure(p.mark):
+            dropped["это размер изделия, а не обозначение"] += 1
+            p.mark = ""
+            p.mark_source = ""
         if p.trademark and not p.mark and not _is_spec_sheet(p.trademark):
             tm = parse_name(p.trademark, hints)
             got = "" if is_opf_only(tm.full) else tm.full
             p.mark = got or (p.trademark
                              if looks_like_mark(p.trademark, type_hints=hints) else "")
             p.mark_source = "товарный знак" if p.mark else ""
+
+    if result is not None and dropped:
+        result.stats["обозначение снято правилами"] = dict(dropped.most_common())
 
 
 async def _enrich(rows: list[Row], result: RunResult,
@@ -309,7 +322,7 @@ async def _enrich(rows: list[Row], result: RunResult,
     if not rows:
         return
 
-    _parse_names(rows)
+    _parse_names(rows, result)
 
     async with RznEnricher() as rzn:
         probe_ok = await rzn.available()
@@ -930,6 +943,9 @@ def _tidy_marks(rows: list[Row], result: RunResult | None = None) -> None:
             continue
         if DESCRIPTIVE_RE.match(p.mark) or _NOISE_MARK.match(p.mark):
             drop("это описание изделия или канцелярия, а не марка")
+            continue
+        if is_measure(p.mark):
+            drop("это размер изделия, а не обозначение")
             continue
         if COUNTRY_RE.match(p.mark.strip(" .,\"'«»")):
             drop("это страна происхождения")
