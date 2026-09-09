@@ -37,6 +37,14 @@ NUMBER_PAGE = 25
 SEARCH_PAGE = 8
 TOO_BROAD = 400
 
+# Поиск по заводу: реестр умеет отбирать по названию производителя и по
+# названию держателя РУ — вхождением подстроки, как и по наименованию. Этим
+# берутся изделия, зарегистрированные под чужим видом: цистоскоп Bissinger
+# описан внутри «Резектоскоп биполярный PLASMALOOP», и по наименованию его не
+# найти никак. Страница шире, чем у поиска по названию: у одного завода
+# десятки регистраций, и нужная может быть любой из них.
+FIRM_PAGE = 50
+
 EMPTY_TTL_DAYS = max(1, settings.cache_ttl_days // 4)
 
 
@@ -443,6 +451,57 @@ class RznEnricher:
         if total is not None and total > TOO_BROAD:
             return NameSearch(total=total, too_broad=True)
         return NameSearch(items=data.get("content") or [], total=total)
+
+    async def search_by_firm(self, name: str, size: int = FIRM_PAGE) -> "NameSearch":
+        """Регистрации завода (или держателя РУ) по куску его названия."""
+
+        name = (name or "").strip()
+        if len(name) < 4 or not self.enabled or self._client is None:
+            return NameSearch(answered=False)
+        for field_name in ("producerName", "declarantName"):
+            data = await self.raw_filter({field_name: name}, size=size,
+                                         cache_key=f"firm:{field_name}:{_norm(name)}")
+            if data is None:
+                return NameSearch(answered=False)
+            total = data.get("totalElements")
+            total = total if isinstance(total, int) else None
+            if total is not None and total > TOO_BROAD:
+                return NameSearch(total=total, too_broad=True)
+            items = data.get("content") or []
+            if items:
+                return NameSearch(items=items, total=total)
+        return NameSearch(items=[], total=0)
+
+    async def firm_records(self, brand: str) -> "NameSearch":
+        """Регистрации завода, названного в контракте товарным знаком.
+
+        Знак пишется латиницей, а завод в реестре — кириллицей («BISSINGER» и
+        «Гюнтер Биссингер Медицинтехник ГмбХ»), и поиск подстрокой их не
+        сводит. Зато у части регистраций того же завода в названии стоит и
+        латинское написание — по нему находится кириллическое, а по нему уже
+        все остальные. Второй заход делается только по слову, которое звучит
+        так же, как знак: гадать про названия завода мы не будем.
+        """
+
+        from .verify import phonetic
+
+        first = await self.search_by_firm(brand)
+        items = list(first.items)
+        want = phonetic(brand)
+        if not items or not want or len(want) < 4:
+            return first
+        seen: set[str] = set()
+        for it in list(items):
+            names = " ".join(((it.get("producer") or {}).get("name") or "",
+                              (it.get("declarant") or {}).get("name") or ""))
+            for word in re.findall(r"[А-Яа-яЁё]{5,}", names):
+                if word.lower() in seen or phonetic(word) != want:
+                    continue
+                seen.add(word.lower())
+                more = await self.search_by_firm(word)
+                known = {x.get("id") for x in items}
+                items.extend(x for x in more.items if x.get("id") not in known)
+        return NameSearch(items=items, total=len(items))
 
     async def confirm_number(self, ru_number: str) -> Optional[RznRecord]:
         """Проверка номера, названного ИИ: запись существует, номер совпадает

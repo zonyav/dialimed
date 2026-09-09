@@ -360,6 +360,7 @@ async def _enrich(rows: list[Row], result: RunResult,
         if not r.pos.manufacturer:
             r.pos.manufacturer_source = ""
             r.pos.confidence = r.pos.confidence or "low"
+    await _enrich_by_firm(rows, result, progress)
     # ИИ спрашиваем последним: всё, что находится бесплатно, к этому моменту
     # уже найдено, и платить за эти строки незачем
     if use_ai:
@@ -511,7 +512,8 @@ async def _enrich_by_ai(rows: list[Row], result: RunResult,
                         hit = await cache.get(gw.model, text)
                         if hit is not None:
                             return text, hit
-                    ans = await identify(text, gw.ask, rzn.search_by_name)
+                    ans = await identify(text, gw.ask, rzn.search_by_name,
+                                         rzn.firm_records)
                     if cache is not None and not ans.error:
                         await cache.put(gw.model, text, ans)
                     return text, ans
@@ -1247,6 +1249,90 @@ def _listed_in_registry(mark: str, key: str, listed: str) -> bool:
         if len(k) >= 4 and k in norm:
             return True
     return False
+
+
+async def _enrich_by_firm(rows: list[Row], result: RunResult,
+                          progress: Progress) -> None:
+    """Ищет изделие по заводу, а не по наименованию.
+
+    Срез по виду промахивается там, где изделие зарегистрировано под чужим
+    видом: цистоскоп Bissinger описан внутри «Резектоскоп биполярный
+    PLASMALOOP», и ни в срезе «Цистоскоп жесткий», ни в поиске по
+    наименованию его нет. Зато реестр умеет отбирать по названию завода — а
+    название завода в контракте написано, это и есть товарный знак.
+
+    Одного совпадения имени завода мало: оно говорит «где-то у этой фирмы», а
+    в отчёт пойдут номер РУ, держатель и ИНН конкретной регистрации. Поэтому
+    запись принимается только тогда, когда артикул из контракта нашёлся в её
+    перечне исполнений (`Match.strong`) — то же доказательство, по которому
+    отбирается запись в срезе по виду.
+    """
+
+    from collections import defaultdict
+    from .enrich.kindmatch import build_index, match_rules
+
+    if not settings.rzn_enabled:
+        return
+    todo: dict[str, list[Position]] = defaultdict(list)
+    spelling: dict[str, str] = {}
+    for r in rows:
+        p = r.pos
+        if p.manufacturer:
+            continue
+        for brand in _brand_tokens(p):
+            key = brand.lower()
+            spelling.setdefault(key, brand)
+            todo[key].append(p)
+    if not todo:
+        return
+
+    stats = {"знаков спрошено": len(todo), "заводов найдено": 0,
+             "строк закрыто": 0}
+    progress("завод", "ищу производителя по товарному знаку", 0, len(todo))
+    async with RznEnricher() as rzn:
+        if not rzn.enabled:
+            return
+        for i, (key, positions) in enumerate(sorted(todo.items()), 1):
+            brand = spelling[key]
+            found = await rzn.firm_records(brand)
+            progress("завод", f"{brand}: {len(found.items)} регистраций",
+                     i, len(todo))
+            if not found.items:
+                continue
+            stats["заводов найдено"] += 1
+            idx = build_index([RznEnricher._record(it, "firm", 1.0)
+                               for it in found.items])
+            for p in positions:
+                if p.manufacturer:
+                    continue
+                m = match_rules(idx, p.mark, p.trademark, p.ru_name)
+                if m.ok and m.strong > 0:
+                    _apply_registry(p, m.record, source="реестр РЗН (по заводу)")
+                    stats["строк закрыто"] += 1
+    result.stats["поиск по заводу"] = stats
+
+
+def _brand_tokens(pos: Position) -> list[str]:
+    """Слова позиции, которые могут оказаться названием завода.
+
+    Берём только приметные — латиницу, кириллицу заглавными, слово в
+    кавычках: заводов с названием «электрод» или «наблюдения» не бывает, а
+    каждый лишний знак — это запрос к реестру."""
+
+    from .enrich.rzn import strong_tokens
+
+    hints = _type_hints(pos)
+    out: list[str] = []
+    for text in (pos.trademark, pos.mark):
+        for word in strong_tokens(text or ""):
+            if len(word) < 4 or not word.isalpha():
+                continue
+            if is_type_word(word, hints) or is_measure(word) or is_opf_only(word):
+                continue
+            if word.lower() in {w.lower() for w in out}:
+                continue
+            out.append(word)
+    return out[:2]
 
 
 async def _enrich_from_kind(rows: list[Row], rzn: RznEnricher,

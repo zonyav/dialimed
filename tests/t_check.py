@@ -549,7 +549,7 @@ check("номер спрятан для самопроверки",
       "Тонометр, РУ № …")
 
 
-def _диалог(ответы, выдача=None):
+def _диалог(ответы, выдача=None, заводы=None):
     шаги = list(ответы)
 
     async def ask(_messages):
@@ -558,7 +558,10 @@ def _диалог(ответы, выдача=None):
     async def search(_phrase):
         return выдача if выдача is not None else NameSearch(items=[])
 
-    return _asyncio.run(identify("Гистероскоп EndoGlance", ask, search))
+    async def search_firm(_phrase):
+        return заводы if заводы is not None else NameSearch(items=[])
+
+    return _asyncio.run(identify("Гистероскоп EndoGlance", ask, search, search_firm))
 
 
 _ОТВЕТ = _диалог(['{"поиск": "EndoGlance"}',
@@ -576,6 +579,23 @@ check("повтор того же запроса обрывает диалог",
       _диалог(['{"поиск": "EndoGlance"}', '{"поиск": "endoglance"}'],
               выдача=NameSearch(items=[{"noRu": "РЗН 1"}])).why,
       "повторяет прежний запрос")
+_ПО_ЗАВОДУ = _диалог(
+    ['{"завод": "ЭСТЭН"}',
+     '{"ответ": "РЗН 2025/26155", "цитата": "Гистероскоп по ТУ"}'],
+    заводы=NameSearch(items=[{"noRu": "РЗН 2025/26155",
+                              "name": "Гистероскоп по ТУ 26.60.12-004",
+                              "producer": {"name": 'ООО "ЭСТЭН"'}}]))
+check("поиск по заводу — такой же шаг диалога",
+      _ПО_ЗАВОДУ.ru_number, "РЗН 2025/26155")
+check("повтор запроса по заводу обрывает диалог",
+      _диалог(['{"завод": "ЭСТЭН"}', '{"завод": "эстэн"}'],
+              заводы=NameSearch(items=[{"noRu": "РЗН 1"}])).why,
+      "повторяет прежний запрос")
+check("завод и наименование — разные запросы, а не повтор",
+      _диалог(['{"поиск": "ЭСТЭН"}', '{"завод": "ЭСТЭН"}',
+               '{"ответ": "РЗН 1", "цитата": "тест"}'],
+              выдача=NameSearch(items=[{"noRu": "РЗН 1"}]),
+              заводы=NameSearch(items=[{"noRu": "РЗН 1"}])).ru_number, "РЗН 1")
 check("три пустых поиска подряд обрывают диалог",
       _диалог(['{"поиск": "а"}', '{"поиск": "б"}', '{"поиск": "в"}']).why,
       "три поиска подряд впустую")
@@ -653,6 +673,7 @@ class _Реестр:
     async def __aenter__(self): return self
     async def __aexit__(self, *e): return False
     async def search_by_name(self, phrase, size=12): return NameSearch(items=[])
+    async def firm_records(self, brand): return NameSearch(items=[])
     async def confirm_number(self, number): return self.записи.get(number)
 
 
