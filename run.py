@@ -294,6 +294,11 @@ def main() -> int:
         print(f"  Срез по коду вида    : совпало {kind['совпало по правилам']}"
               f" · видов {kind.get('видов', 0)}, "
               f"записей {kind.get('записей в срезах', 0)}")
+    firm = (result.stats or {}).get("поиск по заводу")
+    if isinstance(firm, dict) and firm.get("строк закрыто"):
+        print(f"  Поиск по заводу      : закрыто {firm['строк закрыто']}"
+              f" · знаков {firm.get('знаков спрошено', 0)}, "
+              f"заводов {firm.get('заводов найдено', 0)}")
     ai = (result.stats or {}).get("ИИ")
     if isinstance(ai, dict):
         line = f"  Поиск через ИИ       : заполнено {ai.get('заполнено строк', 0)}"
