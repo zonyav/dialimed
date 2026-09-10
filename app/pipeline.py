@@ -164,6 +164,17 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
                     by_query[q.title] = total
                 for m in found:
                     metas.setdefault(m.reestr_number, m)
+                # молча недобрать — худшее, что может сделать поиск: отчёт
+                # выглядит полным и врёт. Страниц у ЕИС берётся ограниченное
+                # число, и если запрос шире, об этом надо сказать вслух
+                if not params.limit_per_ktru and found and total > len(found) + 2:
+                    result.problems.append(Problem(
+                        q.value, "поиск",
+                        f"по запросу «{q.value}» в ЕИС {total} контрактов, "
+                        f"а взято {len(found)}: за один запрос программа "
+                        "просматривает ограниченное число страниц. Сузьте "
+                        "период или задайте условие точнее — иначе часть "
+                        "контрактов в отчёт не попала"))
             except Exception as e:
                 result.problems.append(Problem(q.value, "поиск", f"{type(e).__name__}: {e}"))
                 log.warning("поиск %s %s: %s", q.kind, q.value, e)
