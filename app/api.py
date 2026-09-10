@@ -388,6 +388,10 @@ async def _count_queries(client: EisClient, ru: list[str], models: list[str],
                 q.value, date_from=date_from, date_to=date_to, stages=stages,
                 page=1, page_size=10))
             row["contracts"] = total_found(html)
+            if row["contracts"] > 5000:
+                row["note"] = ("запрос слишком широкий: столько контрактов "
+                               "программа не осилит за разумное время. "
+                               "Сузьте период или напишите название точнее")
         except Exception as e:
             row["note"] = f"ЕИС не ответил ({type(e).__name__})"
         return row

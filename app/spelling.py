@@ -173,4 +173,29 @@ def search_words(phrase: str) -> list[str]:
 
     words = [w for w in _WORD.findall(phrase or "")
              if len(w) >= 3 and re.match(r"[A-Za-zА-Яа-яЁё]", w)]
-    return words or ([phrase.strip()] if (phrase or "").strip() else [])
+    if not words:
+        return [phrase.strip()] if (phrase or "").strip() else []
+    # Больше двух слов не спрашиваем: каждое — отдельный проход по ЕИС.
+    # Выбираем приметные — латиницу, заглавные, «РуСкан» с большой буквой
+    # внутри. Если человек вставил название целиком («Система ультразвуковая
+    # РуСкан 70П»), спрашивать надо про «РуСкан», а не про «ультразвуковая»:
+    # длина тут не показатель, а вид слова — показатель.
+    picked = [w for i, w in enumerate(words) if _name_like(w, first=i == 0)] or words
+    keep = sorted(picked, key=len, reverse=True)[:2]
+    return [w for w in picked if w in keep][:2]
+
+
+def _name_like(word: str, first: bool = False) -> bool:
+    """Похоже ли слово на имя, а не на слово из описания.
+
+    Имя выдаёт себя видом: латиница, заглавные, большая буква внутри слова
+    («РуСкан») или просто заглавная не в начале фразы — «Камера холодильная
+    Бирюса» именем называет третье слово, а не первое."""
+
+    if _HAS_LAT.search(word):
+        return True
+    if len(word) > 1 and word.isupper():
+        return True
+    if any(ch.isupper() for ch in word[1:]):
+        return True
+    return not first and word[:1].isupper()
