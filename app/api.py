@@ -133,8 +133,8 @@ def _busy_job() -> Optional[Job]:
 def _busy_message(job: Job) -> str:
     mins = int((datetime.now() - job.started).total_seconds() // 60)
     ago = f"{mins} мин назад" if mins else "только что"
-    what = ", ".join(job.params.ktru) or "—"
-    return (f"Уже идёт прогон по КТРУ {what}, начат в {job.started:%H:%M} ({ago}). "
+    what = ", ".join(job.params.ktru + job.params.ru + job.params.text) or "—"
+    return (f"Уже идёт прогон по запросу {what}, начат в {job.started:%H:%M} ({ago}). "
             "Дождитесь его окончания или остановите кнопкой «Остановить».")
 
 
@@ -147,6 +147,8 @@ def _busy_message(job: Job) -> str:
 
 class RunRequest(BaseModel):
     ktru: str = ""
+    ru: str = ""
+    model: str = ""
     date_from: str = "01.01.2025"
     date_to: str = ""
     stages: list[str] = Field(default_factory=lambda: list(DEFAULT_STAGES))
@@ -270,8 +272,35 @@ def _cap(s: str) -> str:
     return s if s[-1] in ".!?" else s + "."
 
 
+def _lines(raw: str) -> list[str]:
+    """Поле формы — по запросу на строку. Запятая тоже разделяет: номера РУ
+    привычно перечисляют через запятую, а название модели — нет, поэтому
+    точка с запятой и перевод строки годятся всегда, а запятая только там,
+    где в значении её быть не может."""
+
+    out: list[str] = []
+    for line in re.split(r"[\r\n;]+", raw or ""):
+        line = line.strip(" ," + chr(9))
+        if line and line.lower() not in {x.lower() for x in out}:
+            out.append(line)
+    return out
+
+
+def _ru_numbers(raw: str) -> list[str]:
+    from .enrich.nameparse import extract_ru_numbers
+
+    out: list[str] = []
+    for line in _lines(raw):
+        for num in (extract_ru_numbers(line) or [line]):
+            if num and num.lower() not in {x.lower() for x in out}:
+                out.append(num)
+    return out
+
+
 class KtruCheckRequest(BaseModel):
     ktru: str = ""
+    ru: str = ""
+    model: str = ""
     date_from: str = "01.01.2025"
     date_to: str = ""
     stages: list[str] = Field(default_factory=lambda: list(DEFAULT_STAGES))
@@ -287,11 +316,14 @@ async def ktru_check(req: KtruCheckRequest) -> dict:
     codes = parse_ktru_list(req.ktru)
     bad = parse_ktru_bad(req.ktru)
     kinds = parse_nkmi_list(req.ktru)
-    if not codes and not bad and not kinds:
-        raise HTTPException(400, "Не найдено ни одного кода. Код КТРУ выглядит "
+    ru = _ru_numbers(req.ru)
+    models = _lines(req.model)
+    if not codes and not bad and not kinds and not ru and not models:
+        raise HTTPException(400, "Не найдено ни одного условия. Код КТРУ выглядит "
                                  "так: 32.50.11.000-00000080 или "
                                  "32.50.13.190-00247; код вида медизделия "
-                                 "(НКМИ) — это просто число: 191220")
+                                 "(НКМИ) — это просто число: 191220; можно "
+                                 "искать по номеру РУ или по бренду и модели")
     date_from = req.date_from or "01.01.2025"
     stages = req.stages or list(DEFAULT_STAGES)
     found = []
@@ -313,7 +345,10 @@ async def ktru_check(req: KtruCheckRequest) -> dict:
             found = await check_codes(client, manual, date_from=date_from,
                                       date_to=req.date_to, stages=stages)
         found = found + [by_kind[c] for c in by_kind]
+        words = await _count_queries(client, ru, models, date_from,
+                                     req.date_to, stages)
     return {
+        "queries": words,
         "codes": [
             {"code": c.code, "ok": c.ok, "name": c.name, "unit": c.unit,
              "excluded": c.excluded, "contracts": c.contracts,
@@ -329,15 +364,50 @@ async def ktru_check(req: KtruCheckRequest) -> dict:
     }
 
 
+async def _count_queries(client: EisClient, ru: list[str], models: list[str],
+                         date_from: str, date_to: str,
+                         stages: list[str]) -> list[dict]:
+    """Сколько контрактов вернёт каждый запрос словами — до прогона.
+
+    Показать это надо обязательно: «рускан» — это 645 контрактов и четверть
+    часа, а «Olympus» — 2600 и полтора. Человек должен увидеть цену раньше,
+    чем нажмёт «Искать»."""
+
+    from .eis.search import build_text_search_url, total_found
+    from .pipeline import SearchParams, plan_queries
+
+    plan = plan_queries(SearchParams(ru=ru, text=models, date_from=date_from,
+                                     date_to=date_to, stages=stages))
+    out: list[dict] = []
+
+    async def one(q) -> dict:
+        row = {"kind": q.kind, "query": q.value, "label": q.label,
+               "contracts": None, "note": ""}
+        try:
+            html = await client.fetch_text(build_text_search_url(
+                q.value, date_from=date_from, date_to=date_to, stages=stages,
+                page=1, page_size=10))
+            row["contracts"] = total_found(html)
+        except Exception as e:
+            row["note"] = f"ЕИС не ответил ({type(e).__name__})"
+        return row
+
+    for row in await asyncio.gather(*(one(q) for q in plan if q.kind != "КТРУ")):
+        out.append(row)
+    return out
+
+
 @app.post("/api/run")
 async def start(req: RunRequest) -> dict:
     global CURRENT
 
     codes = parse_ktru_list(req.ktru)
-    if not codes:
-        raise HTTPException(400, "Не найдено ни одного кода КТРУ. "
-                                 "Формат кода: 32.50.11.000-00000080 "
-                                 "или 32.50.13.190-00247")
+    ru = _ru_numbers(req.ru)
+    models = _lines(req.model)
+    if not codes and not ru and not models:
+        raise HTTPException(400, "Не задано ни одного условия. Код КТРУ: "
+                                 "32.50.11.000-00000080; либо номер РУ, "
+                                 "либо бренд и модель")
     busy = _busy_job()
     if busy is not None or RUN_LOCK.locked():
         raise HTTPException(409, _busy_message(busy) if busy else
@@ -345,6 +415,8 @@ async def start(req: RunRequest) -> dict:
 
     params = SearchParams(
         ktru=codes,
+        ru=ru,
+        text=models,
         date_from=req.date_from or "01.01.2025",
         date_to=req.date_to,
         stages=req.stages or list(DEFAULT_STAGES),
@@ -356,7 +428,7 @@ async def start(req: RunRequest) -> dict:
     _forget_old_jobs()
     CURRENT = job.id
     job.task = asyncio.create_task(_run(job))
-    return {"job": job.id, "ktru": codes}
+    return {"job": job.id, "ktru": codes, "ru": ru, "model": models}
 
 
 def _forget_old_jobs() -> None:
@@ -398,7 +470,8 @@ async def _run(job: Job) -> None:
             job.result = res
 
             if res.rows:
-                job.file = settings.out_dir / report_name(job.params.ktru)
+                job.file = settings.out_dir / report_name(
+                    job.params.ktru or job.params.ru or job.params.text)
                 await job.save()
                 _index_add(job)
 

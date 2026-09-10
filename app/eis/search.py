@@ -97,6 +97,51 @@ def build_search_url(
     return f"{SEARCH_URL}?{urlencode(params)}"
 
 
+def build_text_search_url(
+    query: str,
+    *,
+    date_from: str = "01.01.2025",
+    date_to: str = "",
+    stages: Iterable[str] = DEFAULT_STAGES,
+    page: int = 1,
+    page_size: int = 50,
+) -> str:
+    """Поиск словами — по тому же реестру контрактов.
+
+    ЕИС ищет строку в номере реестровой записи, ИКЗ, наименовании заказчика,
+    номере контракта, предмете контракта и наименовании объекта закупки. Слова
+    соединяются «и»: «рускан 70п» — это 30 контрактов против 645 по одному
+    «рускан». Морфология оставлена включённой, как в форме сайта: на замерах
+    она ничего не портила, а окончания в наименованиях гуляют.
+
+    Порядок параметров повторяет `build_search_url` дословно: URL — это ключ
+    кэша, и перестановка обнулила бы весь накопленный кэш.
+    """
+
+    stages = list(stages) or list(DEFAULT_STAGES)
+    params: list[tuple[str, str]] = [
+        ("morphology", "on"),
+        ("search-filter", "Дате размещения"),
+        ("fz44", "on"),
+    ]
+    for s in stages:
+        params.append((f"contractStageList_{s}", "on"))
+    params.append(("contractStageList", ",".join(stages)))
+    if date_from:
+        params.append(("contractDateFrom", date_from))
+    if date_to:
+        params.append(("contractDateTo", date_to))
+    params.append(("searchString", query))
+    params += [
+        ("sortBy", "BY_SIGN_DATE"),
+        ("pageNumber", str(page)),
+        ("sortDirection", "false"),
+        ("recordsPerPage", f"_{page_size}"),
+        ("showLotsInfoHidden", "false"),
+    ]
+    return f"{SEARCH_URL}?{urlencode(params)}"
+
+
 def _to_date(s: str) -> Optional[date]:
     m = _DATE_RE.search(s or "")
     if not m:
@@ -223,6 +268,51 @@ async def search_ktru(
     rest = await asyncio.gather(*(one(p) for p in range(2, pages + 1)))
     for chunk in rest:
         metas.extend(chunk)
+
+    seen: set[str] = set()
+    uniq: list[ContractMeta] = []
+    for m in metas:
+        if m.reestr_number in seen:
+            continue
+        seen.add(m.reestr_number)
+        uniq.append(m)
+    return (uniq[:limit] if limit else uniq), total
+
+
+async def search_text(
+    client: EisClient,
+    query: str,
+    *,
+    date_from: str = "01.01.2025",
+    date_to: str = "",
+    stages: Iterable[str] = DEFAULT_STAGES,
+    limit: int = 0,
+) -> tuple[list[ContractMeta], int]:
+    """Контракты, где встречается строка. Постранично, как и поиск по КТРУ."""
+
+    page_size = settings.eis_page_size
+    first = build_text_search_url(query, date_from=date_from, date_to=date_to,
+                                  stages=stages, page=1, page_size=page_size)
+    html = await client.fetch_text(first)
+    total = total_found(html)
+    metas = parse_search_page(html)
+    if not metas:
+        return [], total
+
+    wanted = min(total, limit) if limit else total
+    pages = _pages(wanted, page_size, limit)
+    if pages > 1:
+        async def one(p: int) -> list[ContractMeta]:
+            url = build_text_search_url(query, date_from=date_from, date_to=date_to,
+                                        stages=stages, page=p, page_size=page_size)
+            try:
+                return parse_search_page(await client.fetch_text(url))
+            except Exception as e:
+                log.warning("поиск «%s» стр.%d: %s", query[:40], p, e)
+                return []
+
+        for chunk in await asyncio.gather(*(one(p) for p in range(2, pages + 1))):
+            metas.extend(chunk)
 
     seen: set[str] = set()
     uniq: list[ContractMeta] = []

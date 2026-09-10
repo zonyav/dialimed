@@ -1421,6 +1421,74 @@ check("молчание реестра об артикулах — не спор
                   "Mercury Safety М8", "", ""), False)
 
 
+print("\n поиск по бренду, модели и номеру РУ")
+from app.spelling import (phrase_matches, search_words, spellings, to_cyrillic,
+                          to_latin)
+
+check("латиница получает кириллическое написание", spellings("ESTEN"),
+      ["ESTEN", "ЭСТЕН"])
+check("и наоборот", spellings("рускан 70п"), ["рускан 70п", "ruskan 70p"])
+check("«е» в начале слова читается как «э»", to_cyrillic("ESTEN"), "ЭСТЕН")
+check("«y» после согласной — это «и»", to_cyrillic("Olympus"), "олимпус")
+check("«y» после гласной — это «й»", to_cyrillic("Bayer"), "байер")
+check("кириллица уходит латиницей", to_latin("РУСКАН"), "RUSKAN")
+
+check("в ЕИС уходит слово, а не фраза", search_words("рускан 70п"), ["рускан"])
+check("дефисное обозначение спрашиваем по имени", search_words("ЭГД-70П"), ["ЭГД"])
+check("когда длинных слов нет, спрашиваем как есть",
+      search_words("CV 170"), ["CV 170"])
+check("длинное слово важнее короткого",
+      search_words("Olympus CV-170"), ["Olympus"])
+
+check("модель находится в тексте позиции",
+      phrase_matches("рускан 70п", "Система ультразвуковая РуСкан 70П"), True)
+check("написание значения не имеет",
+      phrase_matches("рускан 70п", "Аппарат RuScan 70P с принадлежностями"), True)
+check("модель внутри слипшегося обозначения",
+      phrase_matches("70п", "Гастроскоп ЭГД-70П"), True)
+check("чужая модель не подходит",
+      phrase_matches("рускан 70п", "Система ультразвуковая РуСкан 60"), False)
+check("чужой бренд не подходит",
+      phrase_matches("рускан", "Видеоколоноскоп Pentax"), False)
+
+print("\n план запросов к ЕИС")
+from app.pipeline import SearchParams, plan_queries, _collect_rows
+
+_ПЛАН = plan_queries(SearchParams(ktru=["32.50.13.190-00007726"],
+                                  ru=["ФСР 2010/08874"], text=["рускан 70п"]))
+check("код, номер и бренд дают три вида запросов",
+      [q.kind for q in _ПЛАН], ["КТРУ", "№ РУ", "бренд", "бренд"])
+check("номер РУ спрашивается как есть", _ПЛАН[1].value, "ФСР 2010/08874")
+check("бренд — двумя написаниями", [q.value for q in _ПЛАН[2:]], ["рускан", "ruskan"])
+check("повторов в плане нет",
+      len(plan_queries(SearchParams(text=["рускан", "РУСКАН"]))), 2)
+
+
+def _отбор(**kw):
+    poss = [
+        Position(name="Система ультразвуковая", trademark="РуСкан 70П",
+                 ktru="26.60.12.132-00000036"),
+        Position(name="Система ультразвуковая", trademark="РуСкан 60",
+                 ktru="26.60.12.132-00000036"),
+        Position(name="Гистероскоп", ru_name="ФСР 2010/08874 Эндоскоп d=4мм",
+                 ktru="32.50.13.190-00007726"),
+    ]
+    rows = _collect_rows([(ContractMeta(reestr_number="1"), poss)],
+                         set(kw.pop("wanted", ()) or ()), RunResult(), **kw)
+    return [r.pos.trademark or r.pos.ru_name for r in rows]
+
+
+check("бренд с моделью отбирает одну позицию",
+      _отбор(text=["рускан 70п"]), ["РуСкан 70П"])
+check("один бренд — обе его позиции",
+      _отбор(text=["рускан"]), ["РуСкан 70П", "РуСкан 60"])
+check("номер РУ отбирает свою",
+      _отбор(ru=["ФСР 2010/08874"]), ["ФСР 2010/08874 Эндоскоп d=4мм"])
+check("условия пересекаются, а не складываются",
+      _отбор(wanted=["32.50.13.190-00007726"], text=["рускан"]), [])
+check("без условий отбора нет", len(_отбор()), 3)
+
+
 section("4. Корпус печатных форм из Downloads")
 
 from app.eis.html_parser import parse_print_form

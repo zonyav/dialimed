@@ -363,9 +363,10 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
     <textarea id="ktru" spellcheck="false"
       placeholder="32.50.11.000-00000080&#10;191220"></textarea>
     <div class="hint">По одному в строке. Код вида по НКМИ — просто число.
-      Ctrl+Enter — начать поиск.</div>
+      Поля ниже можно заполнить вместо кодов или вместе с ними: заполненные
+      условия должны сойтись все. Ctrl+Enter — начать поиск.</div>
     <div class="stack" style="margin-top:14px">
-      <button id="checkKtru" class="quiet small" type="button">Проверить коды</button>
+      <button id="checkKtru" class="quiet small" type="button">Проверить запрос</button>
       <span class="hint" id="checkHint" style="margin:0;flex:1;min-width:180px">Что это
         за позиция и сколько по ней контрактов.</span>
     </div>
@@ -374,6 +375,20 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
       <button id="usePicked" class="quiet small" type="button">Взять отмеченные коды</button>
       <span class="hint" id="pickHint" style="margin:0"></span>
     </div>
+
+    <label for="model" style="margin-top:20px;display:block">Бренд или модель</label>
+    <textarea id="model" spellcheck="false" style="min-height:64px"
+      placeholder="рускан 70п&#10;Olympus"></textarea>
+    <div class="hint">По запросу в строке. Ищем и латиницей, и кириллицей:
+      «ESTEN» и «ЭСТЕН» для ЕИС — разные слова. В ЕИС уходит название, а модель
+      отбирается уже по тексту позиции.</div>
+
+    <label for="ruNum" style="margin-top:20px;display:block">Номер РУ</label>
+    <textarea id="ruNum" spellcheck="false" style="min-height:52px"
+      placeholder="ФСР 2010/08874"></textarea>
+    <div class="hint">Работает прежде всего как фильтр: в наименовании объекта
+      закупки заказчики пишут номер РУ редко, одним им весь список не собрать —
+      добавьте код КТРУ или НКМИ.</div>
    </div>
 
    <div>
@@ -739,6 +754,8 @@ const stagesPicked = () => $$('#stages input:checked').map(i => i.value);
 function params(){
   return {
     ktru: $('#ktru').value,
+    ru: $('#ruNum').value,
+    model: $('#model').value,
     date_from: $('#from').value.trim() || '01.01.2025',
     date_to: $('#to').value.trim(),
     stages: stagesPicked(),
@@ -876,7 +893,8 @@ $('#checkKtru').onclick = async () => {
   try{
     const p = params();
     const res = await post('/api/ktru-check', {
-      ktru: p.ktru, date_from: p.date_from, date_to: p.date_to, stages: p.stages,
+      ktru: p.ktru, ru: p.ru, model: p.model,
+      date_from: p.date_from, date_to: p.date_to, stages: p.stages,
     });
     CODE_CONTRACTS = {};
     for(const c of (res.codes || [])) CODE_CONTRACTS[c.code] = c.contracts || 0;
@@ -895,6 +913,22 @@ $('#checkKtru').onclick = async () => {
 
 function renderCheck(res){
   let out = '';
+  for(const q of (res.queries || [])){
+    const n = q.contracts;
+    const cap = Number($('#limit').value || 0);
+    const take = (cap && n) ? Math.min(n, cap) : n;
+    out += '<div class="kind"><b>' + esc(q.kind) + ' «' + esc(q.query) + '»' +
+      (q.label && q.label.toLowerCase() !== q.query.toLowerCase()
+        ? ' <span class="hint" style="margin:0">для запроса «' + esc(q.label) + '»</span>' : '') +
+      '</b><div class="meta">' + (n === null || n === undefined
+        ? esc(q.note || 'посчитать не удалось')
+        : (n
+            ? 'контрактов в ЕИС: <span class="n">' + num(n) + '</span> · ' +
+              howLong(take * (res.sec_per_contract || 3)) +
+              ' · в отчёт попадут только те, где запрос сошёлся с позицией'
+            : 'ничего не нашлось — попробуйте другое написание')) +
+      '</div></div>';
+  }
   for(const k of (res.nkmi || [])){
     const n = (k.confirmed || []).length;
     out += '<div class="kind"><b>НКМИ ' + esc(k.code) +
@@ -1029,10 +1063,15 @@ function collapseForm(text){
 function queryNote(p){
   const codes = p.ktru.split('\n').map(x => x.trim()).filter(Boolean);
   const cap = Number(p.limit_per_ktru);
-  return codes.join(', ') + ' · с ' + p.date_from +
+  const lines = x => (x || '').split('\n').map(t => t.trim()).filter(Boolean);
+  const parts = [];
+  if(codes.length) parts.push(codes.join(', '));
+  if(lines(p.model).length) parts.push('бренд: ' + lines(p.model).join(', '));
+  if(lines(p.ru).length) parts.push('№ РУ: ' + lines(p.ru).join(', '));
+  return parts.join(' · ') + ' · с ' + p.date_from +
          (p.date_to ? ' по ' + p.date_to : ' по сегодня') +
          (cap ? ' · не больше ' + cap + ' ' +
-                plural(cap, 'контракта', 'контрактов', 'контрактов') + ' на код' : '');
+                plural(cap, 'контракта', 'контрактов', 'контрактов') + ' на запрос' : '');
 }
 
 $('#editQuery').onclick = () => {
@@ -1061,7 +1100,8 @@ async function aiReadyForRun(){
 
 async function startRun(){
   let p = params();
-  if(!p.ktru.trim()){ toast('Укажите хотя бы один код КТРУ или НКМИ', true); return; }
+  if(!p.ktru.trim() && !p.ru.trim() && !p.model.trim()){
+    toast('Заполните хотя бы одно поле: коды, бренд или номер РУ', true); return; }
   if(!p.stages.length){ toast('Выберите хотя бы одну стадию контракта', true); return; }
   if(p.use_ai){
     const verdict = await aiReadyForRun();
@@ -1085,9 +1125,11 @@ async function startRun(){
 }
 
 $('#go').onclick = startRun;
-$('#ktru').addEventListener('keydown', e => {
-  if(e.key === 'Enter' && (e.ctrlKey || e.metaKey)){ e.preventDefault(); startRun(); }
-});
+for(const id of ['#ktru', '#model', '#ruNum']){
+  $(id).addEventListener('keydown', e => {
+    if(e.key === 'Enter' && (e.ctrlKey || e.metaKey)){ e.preventDefault(); startRun(); }
+  });
+}
 
 /* сколько кодов программа увидела в поле — опечатку видно сразу */
 function countCodes(){

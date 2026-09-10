@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -196,7 +197,10 @@ def report_name(codes: list[str]) -> str:
     """Имя файла отчёта: код первой позиции и время прогона."""
 
     tag = codes[0].replace(".", "_") if codes else "папка"
-    return f"медизделия_{tag}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    # запрос бывает не кодом, а словами («рускан 70п») — в имени файла им
+    # нельзя ни пробелов, ни того, что Windows не пустит в имя
+    tag = re.sub(r"[^0-9A-Za-zА-Яа-яЁё_-]+", "_", tag).strip("_") or "папка"
+    return f"медизделия_{tag[:60]}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
 
 
 def save_report(result: RunResult, path: str | Path, params_note: str = "") -> Path:

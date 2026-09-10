@@ -181,6 +181,12 @@ def main() -> int:
                          "(просто числа) — программа найдёт позиции каталога "
                          "и проверит их по контрактам")
     ap.add_argument("--file", "-f", help="файл со списком кодов КТРУ (по одному в строке)")
+    ap.add_argument("--ru", action="append", default=[], metavar="НОМЕР",
+                    help="номер регистрационного удостоверения; можно повторять")
+    ap.add_argument("--model", "--brand", dest="model", action="append", default=[],
+                    metavar="НАЗВАНИЕ",
+                    help="бренд или модель («рускан 70п»); можно повторять. "
+                         "Ищется несколькими написаниями — латиницей и кириллицей")
     ap.add_argument("--from", dest="date_from", default="01.01.2025",
                     help="дата заключения с (ДД.ММ.ГГГГ), по умолчанию 01.01.2025")
     ap.add_argument("--to", dest="date_to", default="", help="дата заключения по (ДД.ММ.ГГГГ)")
@@ -243,11 +249,16 @@ def main() -> int:
             print(" ", line)
         codes = list(dict.fromkeys(codes + found))
 
-    if not codes:
-        ap.error("укажите хотя бы один код КТРУ или код вида по НКМИ")
+    ru = [x.strip() for x in args.ru if x.strip()]
+    models = [x.strip() for x in args.model if x.strip()]
+    if not codes and not ru and not models:
+        ap.error("укажите код КТРУ, код вида по НКМИ, номер РУ (--ru) "
+                 "или бренд и модель (--model)")
 
     params = SearchParams(
         ktru=codes,
+        ru=ru,
+        text=models,
         date_from=args.date_from,
         date_to=args.date_to,
         stages=[s.strip() for s in args.stages.split(",") if s.strip()],
@@ -255,11 +266,20 @@ def main() -> int:
         use_ai=args.ai,
     )
 
-    print("\n  Коды КТРУ:", ", ".join(codes))
+    if codes:
+        print("\n  Коды КТРУ:", ", ".join(codes))
+    if ru:
+        print("  Номера РУ:", ", ".join(ru))
+    for phrase in models:
+        from app.spelling import spellings
+
+        other = spellings(phrase)[1:]
+        print("  Модель   :", phrase,
+              ("(ищем и как " + ", ".join(other) + ")") if other else "")
     print(f"  Период   : с {params.date_from}" + (f" по {params.date_to}" if params.date_to else ""))
     print("  Стадии   :", ", ".join(STAGES.get(s, s) for s in params.stages))
     if params.limit_per_ktru:
-        print("  Лимит    :", params.limit_per_ktru, "контрактов на код")
+        print("  Лимит    :", params.limit_per_ktru, "контрактов на запрос")
     print()
 
     bar = Bar()
@@ -278,7 +298,8 @@ def main() -> int:
             print(f"    - [{p.stage}] {p.ref}: {p.message}")
         return 1
 
-    out = Path(args.out) if args.out else settings.out_dir / report_name(codes)
+    out = Path(args.out) if args.out else settings.out_dir / report_name(
+        codes or ru or models)
     save_report(result, out, describe(params))
 
     from app import maintenance

@@ -15,7 +15,7 @@ from .eis.documents import (fetch_contract_xml, fetch_print_form,
                             is_amended)
 from .eis.html_parser import parse_print_form
 from .eis.nmck import fetch_nmck_many
-from .eis.search import search_ktru
+from .eis.search import search_ktru, search_text
 from .eis.xml_parser import parse_contract_xml
 from .enrich.textutil import articles, is_measure, is_type_word
 from .enrich.nameparse import (COUNTRY_RE, DESCRIPTIVE_RE, ERUL_RE,
@@ -40,12 +40,25 @@ def _noop(*_a, **_k) -> None:
 
 @dataclass(slots=True)
 class SearchParams:
+    """Запрос: чем искать контракты и что оставить в отчёте.
+
+    Три поля задают поиск и они же служат фильтром. Заполненные поля
+    складываются как «где искать» (объединение) и пересекаются как «что
+    оставить»: код КТРУ плюс бренд — это позиции этого кода с этим брендом,
+    а один бренд — все его позиции, под какими бы кодами они ни лежали."""
+
     ktru: list[str] = field(default_factory=list)
     date_from: str = "01.01.2025"
     date_to: str = ""
     stages: list[str] = field(default_factory=lambda: list(DEFAULT_STAGES))
     limit_per_ktru: int = 0
     use_ai: bool = False
+    ru: list[str] = field(default_factory=list)
+    text: list[str] = field(default_factory=list)
+
+    @property
+    def empty(self) -> bool:
+        return not (self.ktru or self.ru or self.text)
 
 
 def describe(params: SearchParams) -> str:
@@ -55,46 +68,113 @@ def describe(params: SearchParams) -> str:
     два списка отчётов начинают выглядеть по-разному.
     """
 
-    return (f"КТРУ: {', '.join(params.ktru) or '—'}; период с {params.date_from}"
+    parts = []
+    if params.ktru:
+        parts.append("КТРУ: " + ", ".join(params.ktru))
+    if params.ru:
+        parts.append("№ РУ: " + ", ".join(params.ru))
+    if params.text:
+        parts.append("бренд или модель: " + "; ".join(params.text))
+    if not parts:
+        parts.append("КТРУ: —")
+    return ("; ".join(parts) + f"; период с {params.date_from}"
             f"{' по ' + params.date_to if params.date_to else ''}; "
             f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}"
             f"{'; с поиском через ИИ' if params.use_ai else ''}")
+
+
+@dataclass(slots=True)
+class _Query:
+    """Один запрос к ЕИС: чем спрашиваем и как это назвать пользователю."""
+
+    kind: str          # «КТРУ», «№ РУ» или «бренд»
+    value: str         # что уходит в ЕИС
+    label: str = ""    # что показать в сводке (для написаний — исходное слово)
+
+    @property
+    def title(self) -> str:
+        return f"{self.kind} {self.label or self.value}"
+
+
+def plan_queries(params: SearchParams) -> list[_Query]:
+    """Из запроса пользователя — список запросов к ЕИС.
+
+    Бренд спрашивается несколькими написаниями (`spelling.spellings`): поиск
+    ЕИС ищет буквальное вхождение, и «ESTEN» не находит «ЭСТЕН». Номер РУ
+    пишется одинаково всегда, ему варианты не нужны.
+    """
+
+    from .spelling import search_words, spellings
+
+    out: list[_Query] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(kind: str, value: str, label: str = "") -> None:
+        value = (value or "").strip()
+        key = (kind, value.lower())
+        if value and key not in seen:
+            seen.add(key)
+            out.append(_Query(kind=kind, value=value, label=label))
+
+    for code in params.ktru:
+        add("КТРУ", code)
+    for number in params.ru:
+        add("№ РУ", number)
+    for phrase in params.text:
+        for variant in spellings(phrase):
+            for word in search_words(variant):
+                add("бренд", word, label=phrase)
+    return out
+
+
+async def _run_query(client: EisClient, q: _Query, params: SearchParams):
+    if q.kind == "КТРУ":
+        return await search_ktru(client, q.value, date_from=params.date_from,
+                                 date_to=params.date_to, stages=params.stages,
+                                 limit=params.limit_per_ktru)
+    return await search_text(client, q.value, date_from=params.date_from,
+                             date_to=params.date_to, stages=params.stages,
+                             limit=params.limit_per_ktru)
 
 
 async def run_online(params: SearchParams, progress: Progress = _noop) -> RunResult:
     fetched_at_start = dict(EIS_TOTALS)
     result = RunResult()
     wanted = {k for k in params.ktru if k}
-    if not wanted:
-        result.problems.append(Problem("—", "вход", "не задан ни один код КТРУ"))
+    if params.empty:
+        result.problems.append(Problem(
+            "—", "вход", "не задано ни одного условия: нужен код КТРУ или НКМИ, "
+                         "номер РУ либо название бренда или модели"))
         return result
 
     t0 = time.time()
     metas: dict[str, ContractMeta] = {}
     totals: dict[str, int] = {}
+    by_query: dict[str, int] = {}
+    queries = plan_queries(params)
 
     async with EisClient() as client:
-        progress("поиск", "поиск контрактов в ЕИС", 0, len(wanted))
-        done_k = 0
-        for code in params.ktru:
+        progress("поиск", "поиск контрактов в ЕИС", 0, len(queries))
+        for done_k, q in enumerate(queries, 1):
             try:
-                found, total = await search_ktru(
-                    client, code,
-                    date_from=params.date_from, date_to=params.date_to,
-                    stages=params.stages, limit=params.limit_per_ktru,
-                )
-                totals[code] = total
+                found, total = await _run_query(client, q, params)
+                if q.kind == "КТРУ":
+                    totals[q.value] = total
+                else:
+                    by_query[q.title] = total
                 for m in found:
                     metas.setdefault(m.reestr_number, m)
             except Exception as e:
-                result.problems.append(Problem(code, "поиск", f"{type(e).__name__}: {e}"))
-                log.warning("поиск по КТРУ %s: %s", code, e)
-            done_k += 1
-            progress("поиск", f"КТРУ {code}: найдено {totals.get(code, 0)}",
-                     done_k, len(wanted))
+                result.problems.append(Problem(q.value, "поиск", f"{type(e).__name__}: {e}"))
+                log.warning("поиск %s %s: %s", q.kind, q.value, e)
+            progress("поиск", f"{q.kind} {q.value}: найдено "
+                              f"{totals.get(q.value, by_query.get(q.title, 0))}",
+                     done_k, len(queries))
 
         if not metas:
             result.stats = {"контрактов": 0, "по КТРУ": totals}
+            if by_query:
+                result.stats["по запросу"] = by_query
             return result
 
         items = list(metas.values())
@@ -126,7 +206,8 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
         result.stats["разбор контрактов"] = _source_stats(parsed)
         await _fill_nmck(client, [m for m, _ in parsed], result, progress)
 
-    rows = _collect_rows(parsed, wanted, result)
+    rows = _collect_rows(parsed, wanted, result,
+                         ru=params.ru, text=params.text)
     await _enrich(rows, result, progress, use_ai=params.use_ai)
 
     result.rows = rows
@@ -137,6 +218,8 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
         "по КТРУ": totals,
         "секунд": round(time.time() - t0, 1),
     })
+    if by_query:
+        result.stats["по запросу"] = by_query
 
     # запоминаем темп: сколько секунд ушло на контракт. Прогон, целиком
     # взятый из кэша, для оценки не годится — он всегда быстрый.
@@ -218,13 +301,39 @@ def _name_key(s: str) -> str:
 
 
 def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
-                  wanted: set[str], result: RunResult) -> list[Row]:
+                  wanted: set[str], result: RunResult,
+                  ru: Iterable[str] = (), text: Iterable[str] = ()) -> list[Row]:
+    """Отбор позиций под запрос.
+
+    Условия пересекаются: код КТРУ, номер РУ и бренд, если заполнены, должны
+    сойтись все. Внутри одного поля строки складываются — два бренда значат
+    «или», иначе двумя названиями сразу искать было бы нельзя.
+
+    Сверяемся с текстом позиции в том виде, в каком он попадёт в отчёт: то,
+    что видит пользователь в «Тексте позиции из контракта», и есть то, по чему
+    шёл отбор. Никакой отдельной невидимой строки для сверки нет."""
+
+    from .spelling import any_match
+
+    ru = [x for x in ru if str(x).strip()]
+    text = [x for x in text if str(x).strip()]
     rows: list[Row] = []
     skipped = 0
     no_match = 0
     no_code = 0
+    off_query = 0
     by_name: list[tuple[str, str]] = []
     only_matching = bool(wanted)
+
+    def wanted_here(p: Position) -> bool:
+        if not (ru or text):
+            return True
+        body = p.contract_text()
+        if ru and not any_match(ru, body):
+            return False
+        if text and not any_match(text, body):
+            return False
+        return True
     for meta, poss in parsed:
         matched = [p for p in poss if p.matches_ktru(wanted)] if wanted else list(poss)
         if only_matching:
@@ -244,6 +353,10 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
             take = list(poss)
         if wanted and not matched:
             no_match += 1
+        if ru or text:
+            fits = [p for p in take if wanted_here(p)]
+            off_query += len(take) - len(fits)
+            take = fits
         for p in take:
             if not p.ru_number:
                 src = p.ru_name or p.name
@@ -264,6 +377,8 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
                 f"наименования: заказчик не заполнил код КТРУ"))
     if no_match:
         result.stats["контрактов без искомого КТРУ"] = no_match
+    if off_query:
+        result.stats["позиций мимо запроса"] = off_query
     return rows
 
 
