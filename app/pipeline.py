@@ -93,7 +93,15 @@ class _Query:
 
     @property
     def title(self) -> str:
-        return f"{self.kind} {self.label or self.value}"
+        """Как назвать запрос в сводке: что спросили и ради чего.
+
+        Спрашиваем словом («рускан»), а ищет человек модель («рускан 70п») —
+        в статистике должно стоять и то, и другое, иначе непонятно, почему
+        контрактов больше, чем строк в отчёте."""
+
+        if self.label and self.label.lower() != self.value.lower():
+            return f"{self.kind} «{self.value}» для «{self.label}»"
+        return f"{self.kind} «{self.value}»"
 
 
 def plan_queries(params: SearchParams) -> list[_Query]:
