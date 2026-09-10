@@ -219,6 +219,7 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
 
     rows = _collect_rows(parsed, wanted, result,
                          ru=params.ru, text=params.text)
+    _note_services(rows, result)
     await _enrich(rows, result, progress, use_ai=params.use_ai)
 
     result.rows = rows
@@ -391,6 +392,33 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
     if off_query:
         result.stats["позиций мимо запроса"] = off_query
     return rows
+
+
+# Поиск по модели приводит не только поставки: половина контрактов с моделью
+# в тексте — это её обслуживание и ремонт. Строки честные, но цена в них не
+# про цену изделия, и сводка обязана сказать это вслух, иначе средний чек
+# по модели окажется ценой годового сервиса.
+_SERVICE_RE = re.compile(
+    r"^\s*(?:оказание\s+услуг|услуг[аи]?\b|техническо[ем]\s+обслуживани|"
+    r"обслуживани|ремонт|контроль\s+технического|поверк|калибровк|монтаж|"
+    r"пусконаладк|демонтаж|утилизац|аренд|поставка\s+запасных)", re.I)
+
+
+def _looks_like_service(pos: Position) -> bool:
+    return bool(_SERVICE_RE.match(pos.name or ""))
+
+
+def _note_services(rows: list[Row], result: RunResult) -> None:
+
+    n = sum(1 for r in rows if _looks_like_service(r.pos))
+    if not n or not rows:
+        return
+    result.stats["строк про услуги, а не поставку"] = n
+    result.problems.append(Problem(
+        "—", "отбор",
+        f"{n} строк из {len(rows)} — это обслуживание, ремонт или поверка, "
+        "а не поставка изделия. Модель в них названа верно, но цена в таких "
+        "строках — цена работы, и в средние цены изделия её брать нельзя"))
 
 
 def _type_hints(pos: Position) -> list[str]:
