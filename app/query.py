@@ -94,15 +94,14 @@ def parse(phrase: str) -> Query:
     один артикул, а не имя «AJ» и число «15»."""
 
     q = Query(raw=re.sub(r"\s+", " ", (phrase or "").strip()))
-    raw_words = [w for w in _WORD.findall(phrase or "") if w]
+    spans = [m for m in _WORD.finditer(phrase or "")]
     words: list[str] = []
     i = 0
-    while i < len(raw_words):
-        w = raw_words[i]
-        nxt = raw_words[i + 1] if i + 1 < len(raw_words) else ""
-        if (w.isalpha() and len(w) <= PREFIX_MAX and nxt
-                and re.match(r"^\d", nxt)):
-            words.append(w + nxt)
+    while i < len(spans):
+        w = spans[i].group(0)
+        glue = _glue(phrase or "", spans, i)
+        if glue:
+            words.append(glue)
             i += 2
             continue
         words.append(w)
@@ -118,22 +117,36 @@ def parse(phrase: str) -> Query:
     return q
 
 
+def _glue(text: str, spans: list, i: int) -> str:
+    """Приставка и число, стоящие рядом, — один артикул: «AJ 15», «AJ-15».
+
+    Между ними допустим только пробел или дефис. Иначе склеивается то, что
+    рядом не стоит: товарный знак «Ajax (№ 832695)» давал «ajax832695», а
+    такой «артикул» потом читался как чужое исполнение семейства AJ."""
+
+    if i + 1 >= len(spans):
+        return ""
+    w, nxt = spans[i].group(0), spans[i + 1].group(0)
+    if not (w.isalpha() and len(w) <= PREFIX_MAX and re.match(r"^\d", nxt)):
+        return ""
+    between = text[spans[i].end():spans[i + 1].start()]
+    return w + nxt if between in ("", " ", "-", "‑", "–") else ""
+
+
 def article_keys(text: str) -> set[str]:
     """Артикулы, написанные в тексте, — в сравнимом виде.
 
     Склейка та же, что в запросе: «AJ 15» и «AJ-15» дают «aj15»."""
 
     out: set[str] = set()
-    raw = [w for w in _WORD.findall(text or "") if w]
-    for i, w in enumerate(raw):
-        k = _norm(w)
+    spans = [m for m in _WORD.finditer(text or "")]
+    for i, m in enumerate(spans):
+        k = _norm(m.group(0))
         if k and re.search(r"\d", k):
             out.add(k)
-        if (w.isalpha() and len(w) <= PREFIX_MAX and i + 1 < len(raw)
-                and re.match(r"^\d", raw[i + 1])):
-            glued = _norm(w + raw[i + 1])
-            if glued:
-                out.add(glued)
+        glue = _glue(text or "", spans, i)
+        if glue:
+            out.add(_norm(glue))
     return out
 
 
@@ -149,17 +162,39 @@ def _has_article(key: str, keys: set[str]) -> bool:
     return any(key == k or key in k for k in keys)
 
 
+def _family(key: str) -> str:
+    """Буквенная приставка артикула: у «AJ15» это «aj», у «70p» — пусто.
+
+    Сравнивается она целиком, а не началом: «ajax832695» и «aj11» — разные
+    семейства, хотя одно начинается с другого."""
+
+    m = re.match(r"^([a-z]*)\d", key or "")
+    return m.group(1) if m else ""
+
+
 def _siblings(key: str, keys: set[str]) -> int:
     """Сколько ещё исполнений того же семейства перечислено рядом.
 
     «AJ15» среди «AJ11, AJ12, AJ15, AJ16, AJ18» — пять: регистрация названа
     целиком, и какое исполнение поставлено, текст не говорит."""
 
-    prefix = re.match(r"^[a-z]+", key)
-    if not prefix:
+    p = _family(key)
+    if not p:
         return 1
-    p = prefix.group(0)
-    return len({k for k in keys if k.startswith(p) and re.search(r"\d", k)})
+    return len({k for k in keys if _family(k) == p})
+
+
+def _sibling_chosen(key: str, chosen: set[str]) -> bool:
+    """Названо ли в выбранном заказчиком другое исполнение того же семейства.
+
+    Это единственный случай, когда артикул в наименовании по РУ ничего не
+    значит: регистрация перечисляет все исполнения, а купили то, что написано
+    в товарном знаке. Правило бесплатное и не требует ни реестра, ни модели."""
+
+    p = _family(key)
+    if len(p) < 2:
+        return False
+    return any(k != key and _family(k) == p for k in chosen)
 
 
 @dataclass(slots=True)
@@ -213,6 +248,11 @@ def judge(phrase: str, chosen: str, family: str = "", known: str = "") -> Verdic
     for a in q.articles:
         if _has_article(a.key, chosen_arts):
             continue
+        if _sibling_chosen(a.key, chosen_arts):
+            # заказчик назвал исполнение, и оно другое: «варианты исполнения:
+            # AJ11, AJ12, AJ15, AJ16, AJ18» в наименовании по РУ — это вся
+            # регистрация, а товарный знак «AJ11» — то, что покупают
+            return Verdict()
         if _has_article(a.key, family_arts):
             if _siblings(a.key, family_arts) > 1:
                 variant_list = True
