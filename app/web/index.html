@@ -380,6 +380,18 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
       закупки заказчики пишут номер РУ редко, одним им весь список не собрать —
       добавьте код КТРУ или НКМИ.</div>
 
+    <div class="note" id="planBox" style="margin-top:20px"></div>
+
+    <label class="chk" style="margin-top:4px;display:block">
+      <input type="checkbox" id="onlyCodes" checked> Искать только внутри кодов
+    </label>
+    <div class="hint">Когда код задан, он задаёт область поиска, а бренд и номер
+      РУ отбирают внутри неё. Так находится и то, что ЕИС словом не находит
+      вовсе. Снимите галочку, чтобы вдобавок спросить ЕИС словами по всему
+      реестру — тогда придут и позиции под другими кодами и без кода, но только
+      те, где модель написана в наименовании объекта закупки или в товарном
+      знаке.</div>
+
     <label class="chk" style="margin-top:18px;display:block">
       <input type="checkbox" id="sweep"> Дособрать по кодам КТРУ найденных позиций
     </label>
@@ -772,8 +784,77 @@ function params(){
     stages: stagesPicked(),
     limit_per_ktru: Number($('#limit').value || 0),
     sweep_codes: $('#sweep').checked,
+    only_codes: $('#onlyCodes').checked,
     use_ai: $('#useAi').checked && AI.has_key,
   };
+}
+
+/* ── что именно будет искаться ──────────────────────────────────────
+   Три поля с разным смыслом — самая частая причина «почему в отчёте
+   не то». Поэтому запрос проговаривается словами до того, как его
+   запустят: где ищем, что оставляем и чего так не найти. */
+
+const KTRU_RE = /\b\d{2}\.\d{2}\.\d{2}\.\d{3}-\d{4,8}\b/g;
+const lines = s => (s || '').split("\n").map(x => x.trim()).filter(Boolean);
+
+function queryParts(){
+  const raw = $('#ktru').value || '';
+  const codes = raw.match(KTRU_RE) || [];
+  const kinds = lines(raw).filter(l => /^\d{4,9}$/.test(l));
+  return {codes, kinds, models: lines($('#model').value),
+          ru: lines($('#ruNum').value), inside: $('#onlyCodes').checked};
+}
+
+function quoted(list){ return list.map(x => '«' + esc(x) + '»').join(', '); }
+
+function planText(){
+  const q = queryParts();
+  const nCodes = q.codes.length + q.kinds.length;
+  const filters = [];
+  if(q.models.length) filters.push('модель или бренд ' + quoted(q.models));
+  if(q.ru.length) filters.push('номер РУ ' + quoted(q.ru));
+  if(!nCodes && !filters.length)
+    return '<b>Запрос пока пустой</b>Заполните хотя бы одно поле: код, ' +
+           'бренд с моделью или номер РУ.';
+
+  let where, keep, warn = '';
+  const codeWord = plural(nCodes, 'код', 'кода', 'кодов');
+  if(nCodes && filters.length && q.inside){
+    where = 'пройдём ' + nCodes + ' ' + codeWord + ' целиком — все контракты ' +
+            'этих кодов за период';
+    keep = 'позиции, где сошлось: ' + filters.join(' и ');
+    warn = 'Контракты под другими кодами и вовсе без кода так не найти — ' +
+           'для них снимите галочку «искать только внутри кодов».';
+  } else if(nCodes && filters.length){
+    where = 'пройдём ' + nCodes + ' ' + codeWord + ' целиком и вдобавок ' +
+            'спросим ЕИС словами по всему реестру';
+    keep = 'позиции, где сошлось: ' + filters.join(' и ') +
+           ' — и то же самое в контрактах, найденных по кодам';
+    warn = 'Словами ЕИС находит только то, что написано в наименовании ' +
+           'объекта закупки или в товарном знаке.';
+  } else if(nCodes){
+    where = 'пройдём ' + nCodes + ' ' + codeWord + ' целиком';
+    keep = 'все медизделия этих кодов';
+  } else {
+    where = 'спросим ЕИС словами по всему реестру контрактов';
+    keep = 'позиции, где сошлось: ' + filters.join(' и ');
+    warn = 'Модель, записанная только в «наименовании по РУ», так не ' +
+           'находится: ЕИС это поле не индексирует. Добавьте код КТРУ или ' +
+           'НКМИ — или включите «дособрать по кодам».';
+  }
+  return '<b>Что будет искаться</b>Где ищем: ' + where + '. Что оставим: ' +
+         keep + '.' + (warn ? '<div style="margin-top:6px">' + warn + '</div>' : '');
+}
+
+function updatePlan(){
+  const box = $('#planBox');
+  if(box) box.innerHTML = planText();
+  const q = queryParts();
+  const row = $('#onlyCodes').closest('label');
+  const show = (q.codes.length + q.kinds.length) > 0 &&
+               (q.models.length + q.ru.length) > 0;
+  row.classList.toggle('hidden', !show);
+  row.nextElementSibling.classList.toggle('hidden', !show);
 }
 
 /* ── поиск через ИИ ─────────────────────────────────────────────── */
@@ -905,7 +986,7 @@ $('#checkKtru').onclick = async () => {
   try{
     const p = params();
     const res = await post('/api/ktru-check', {
-      ktru: p.ktru, ru: p.ru, model: p.model,
+      ktru: p.ktru, ru: p.ru, model: p.model, only_codes: p.only_codes,
       date_from: p.date_from, date_to: p.date_to, stages: p.stages,
     });
     CODE_CONTRACTS = {};
@@ -1708,6 +1789,11 @@ $('#quit').onclick = async () => {
 
 async function boot(){
   heartbeat();
+  updatePlan();
+  for(const id of ['#ktru', '#model', '#ruNum'])
+    $(id).addEventListener('input', updatePlan);
+  for(const id of ['#onlyCodes', '#sweep'])
+    $(id).addEventListener('change', updatePlan);
   loadStatus().catch(() => lost());
   loadAi();
   loadReports();

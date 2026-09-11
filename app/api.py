@@ -155,6 +155,7 @@ class RunRequest(BaseModel):
     limit_per_ktru: int = 0
     use_ai: bool = False
     sweep_codes: bool = False
+    only_codes: bool = True
 
 
 class AiRequest(BaseModel):
@@ -305,6 +306,7 @@ class KtruCheckRequest(BaseModel):
     date_from: str = "01.01.2025"
     date_to: str = ""
     stages: list[str] = Field(default_factory=lambda: list(DEFAULT_STAGES))
+    only_codes: bool = True
 
 
 @app.post("/api/ktru-check")
@@ -346,8 +348,12 @@ async def ktru_check(req: KtruCheckRequest) -> dict:
             found = await check_codes(client, manual, date_from=date_from,
                                       date_to=req.date_to, stages=stages)
         found = found + [by_kind[c] for c in by_kind]
-        words = await _count_queries(client, ru, models, date_from,
-                                     req.date_to, stages)
+        # внутри кодов словами не спрашивают — и считать эти запросы незачем:
+        # проверка должна показывать ту же работу, что и будущий прогон
+        inside = bool(codes or kinds) and bool(req.only_codes)
+        words = ([] if inside else
+                 await _count_queries(client, ru, models, date_from,
+                                      req.date_to, stages))
     return {
         "queries": words,
         "codes": [
@@ -361,6 +367,8 @@ async def ktru_check(req: KtruCheckRequest) -> dict:
         ],
         "nkmi": nkmi_out,
         "bad": bad,
+        "inside_codes": inside,
+        "filters": {"ru": ru, "model": models},
         "sec_per_contract": round(timing.pace(), 2),
     }
 
@@ -431,6 +439,7 @@ async def start(req: RunRequest) -> dict:
         limit_per_ktru=max(0, req.limit_per_ktru),
         use_ai=bool(req.use_ai),
         sweep_codes=bool(req.sweep_codes),
+        only_codes=bool(req.only_codes),
     )
     job = Job(id=uuid.uuid4().hex[:12], params=params, note=describe(params))
     JOBS[job.id] = job

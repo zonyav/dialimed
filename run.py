@@ -199,6 +199,10 @@ def main() -> int:
                     help="дособрать по кодам КТРУ найденных позиций: медленно, "
                          "но достаёт контракты, где модель записана только в "
                          "наименовании по РУ — такие ЕИС словом не находит")
+    ap.add_argument("--words-too", action="store_true",
+                    help="когда задан код: спрашивать ЕИС ещё и словами бренда "
+                         "и номером РУ. По умолчанию код задаёт область поиска, "
+                         "а бренд и номер работают отбором внутри неё")
     ap.add_argument("--limit", type=int, default=0,
                     help="максимум контрактов на один код КТРУ (0 — без ограничения)")
     ap.add_argument("--out", "-o", help="путь к файлу отчёта .xlsx")
@@ -269,6 +273,7 @@ def main() -> int:
         limit_per_ktru=max(0, args.limit),
         use_ai=args.ai,
         sweep_codes=args.sweep,
+        only_codes=not args.words_too,
     )
 
     if codes:

@@ -43,9 +43,18 @@ class SearchParams:
     """Запрос: чем искать контракты и что оставить в отчёте.
 
     Три поля задают поиск и они же служат фильтром. Заполненные поля
-    складываются как «где искать» (объединение) и пересекаются как «что
-    оставить»: код КТРУ плюс бренд — это позиции этого кода с этим брендом,
-    а один бренд — все его позиции, под какими бы кодами они ни лежали."""
+    пересекаются как «что оставить»: код КТРУ плюс бренд — это позиции этого
+    кода с этим брендом, а один бренд — все его позиции, под какими бы кодами
+    они ни лежали.
+
+    А вот «где искать» решает `only_codes`, и по умолчанию код задаёт область:
+    если код назван, ЕИС спрашивается только кодами, а бренд и номер РУ
+    работают отбором внутри. Так человек и рассуждает — «все стоматологические
+    установки, из них AJ15», — и так находится то, что словом не находится
+    вовсе: модель, записанная только в наименовании по РУ. Снятая галочка
+    возвращает объединение: ЕИС спрашивается ещё и словами, и в отчёт попадают
+    позиции под другими кодами и вовсе без кода (в разобранном прогоне по
+    «Ajax AJ15» таких две из двадцати)."""
 
     ktru: list[str] = field(default_factory=list)
     date_from: str = "01.01.2025"
@@ -56,10 +65,17 @@ class SearchParams:
     ru: list[str] = field(default_factory=list)
     text: list[str] = field(default_factory=list)
     sweep_codes: bool = False
+    only_codes: bool = True
 
     @property
     def empty(self) -> bool:
         return not (self.ktru or self.ru or self.text)
+
+    @property
+    def inside_codes(self) -> bool:
+        """Ищем ли мы только внутри кодов. Без кодов вопрос не стоит."""
+
+        return bool(self.ktru) and self.only_codes
 
 
 def describe(params: SearchParams) -> str:
@@ -78,6 +94,9 @@ def describe(params: SearchParams) -> str:
         parts.append("бренд или модель: " + "; ".join(params.text))
     if not parts:
         parts.append("КТРУ: —")
+    if params.ktru and (params.ru or params.text):
+        parts.append("только внутри кодов" if params.only_codes
+                     else "и словами по всему ЕИС")
     return ("; ".join(parts) + f"; период с {params.date_from}"
             f"{' по ' + params.date_to if params.date_to else ''}; "
             f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}"
@@ -128,6 +147,10 @@ def plan_queries(params: SearchParams) -> list[_Query]:
 
     for code in params.ktru:
         add("КТРУ", code)
+    if params.inside_codes:
+        # код назван и он задаёт область: спрашивать ЕИС ещё и словами незачем,
+        # бренд с номером остаются отбором внутри кодов
+        return out
     for number in params.ru:
         add("№ РУ", number)
     for phrase in params.text:
@@ -209,6 +232,14 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
             rows += await _sweep_by_codes(client, rows, params, result,
                                           progress, set(metas))
 
+    if params.inside_codes and (params.text or params.ru):
+        result.problems.append(Problem(
+            "—", "отбор",
+            "искали только внутри заданных кодов: позиции под другими кодами "
+            "и без кода КТРУ в отчёт не попали. Чтобы добрать и их, снимите "
+            "галочку «искать только внутри кодов» — тогда ЕИС спросят ещё и "
+            "словами, но там находится лишь то, что написано в наименовании "
+            "объекта закупки или в товарном знаке"))
     _note_services(rows, result)
     await _enrich(rows, result, progress, use_ai=params.use_ai,
                   text=params.text)

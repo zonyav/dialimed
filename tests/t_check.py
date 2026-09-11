@@ -1509,9 +1509,17 @@ print("\n план запросов к ЕИС")
 from app.pipeline import SearchParams, plan_queries, _collect_rows
 
 _ПЛАН = plan_queries(SearchParams(ktru=["32.50.13.190-00007726"],
-                                  ru=["ФСР 2010/08874"], text=["рускан 70п"]))
+                                  ru=["ФСР 2010/08874"], text=["рускан 70п"],
+                                  only_codes=False))
 check("код, номер и бренд дают три вида запросов",
       [q.kind for q in _ПЛАН], ["КТРУ", "№ РУ", "бренд", "бренд"])
+check("код задаёт область: словами ЕИС не спрашивают",
+      [q.kind for q in plan_queries(SearchParams(
+          ktru=["32.50.13.190-00007726"], ru=["ФСР 2010/08874"],
+          text=["рускан 70п"]))], ["КТРУ"])
+check("без кода спрашивают словами",
+      [q.value for q in plan_queries(SearchParams(text=["рускан 70п"]))],
+      ["рускан", "ruskan"])
 check("номер РУ спрашивается как есть", _ПЛАН[1].value, "ФСР 2010/08874")
 check("бренд — двумя написаниями", [q.value for q in _ПЛАН[2:]], ["рускан", "ruskan"])
 check("повторов в плане нет",
