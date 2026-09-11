@@ -580,7 +580,7 @@ def _run_notes(res: RunResult) -> list[str]:
         elif p.stage == "поиск":
             notes.append(f"Код КТРУ {p.ref}: поиск в ЕИС не выполнен "
                          f"({p.message}).")
-    return notes[:5]
+    return notes[:8]
 
 
 def _input_note(p: Problem) -> str:

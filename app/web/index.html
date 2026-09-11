@@ -833,7 +833,7 @@ function planText(){
   const codeWord = plural(nCodes, 'код', 'кода', 'кодов');
   if(nCodes && filters.length && q.inside){
     where = 'пройдём ' + nCodes + ' ' + codeWord + ' целиком — все контракты ' +
-            'этих кодов за период';
+            plural(nCodes, 'этого кода', 'этих кодов', 'этих кодов') + ' за период';
     keep = 'позиции, где сошлось: ' + filters.join(' и ');
     warn = 'Контракты под другими кодами и вовсе без кода так не найти — ' +
            'для них снимите галочку «искать только внутри кодов».';
@@ -1018,6 +1018,17 @@ $('#checkKtru').onclick = async () => {
 
 function renderCheck(res){
   let out = '';
+  /* когда код задаёт область, слова в ЕИС не уходят — и считать их нечего.
+     Молча пропустить это нельзя: человек ввёл бренд и ждёт про него строчку */
+  const f = res.filters || {};
+  const inside = res.inside_codes && ((f.model || []).length + (f.ru || []).length);
+  if(inside){
+    const what = [].concat(f.model || [], f.ru || [])
+                   .map(x => '«' + esc(x) + '»').join(', ');
+    out += '<div class="note"><b>Отбор внутри кодов</b>' + what +
+           ' — это не запрос к ЕИС, а условие для позиций найденных ' +
+           'контрактов. Время прогона считайте по кодам ниже.</div>';
+  }
   for(const q of (res.queries || [])){
     const n = q.contracts;
     const cap = Number($('#limit').value || 0);
