@@ -329,9 +329,10 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
     сойтись все. Внутри одного поля строки складываются — два бренда значат
     «или», иначе двумя названиями сразу искать было бы нельзя.
 
-    Сверяемся с текстом позиции в том виде, в каком он попадёт в отчёт: то,
-    что видит пользователь в «Тексте позиции из контракта», и есть то, по чему
-    шёл отбор. Никакой отдельной невидимой строки для сверки нет."""
+    Сверяемся с тем, что попадёт в отчёт: текст позиции и характеристики — оба
+    видны в файле, так что любую строку можно объяснить. Характеристики нужны:
+    на прогоне по «рускан 70п» они добавили 4 строки из 228, где модель названа
+    только там. Невидимой строки для сверки нет ни одной."""
 
     from .spelling import any_match
 
@@ -348,7 +349,7 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
     def wanted_here(p: Position) -> bool:
         if not (ru or text):
             return True
-        body = p.contract_text()
+        body = p.contract_text() + " " + (p.specs_text or "")
         if ru and not any_match(ru, body):
             return False
         if text and not any_match(text, body):
