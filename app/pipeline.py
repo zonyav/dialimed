@@ -769,6 +769,8 @@ async def _enrich(rows: list[Row], result: RunResult,
         await _enrich_by_ai(rows, result, progress)
     _drop_holder_without_ru(rows, result)
     _confirm_brand(rows, list(text), result)
+    if use_ai:
+        rows[:] = await _ai_pick_variant(rows, list(text), result, progress)
     _note_registry_gaps(rows, result)
 
 
@@ -806,6 +808,140 @@ def _confirm_brand(rows: list[Row], text: list[str], result: RunResult) -> None:
         result.stats["бренд подтверждён производителем"] = n
         result.stats["бренд в контракте не назван"] = max(
             0, result.stats.get("бренд в контракте не назван", 0) - n)
+
+
+# Сколько сомнительных строк отдавать модели за один прогон. Вопрос дешёвый —
+# один запрос без поисков по реестру, — но и строк таких обычно единицы.
+AI_MAX_VARIANTS = 60
+
+
+async def _ai_pick_variant(rows: list[Row], text: list[str], result: RunResult,
+                           progress: Progress) -> list[Row]:
+    """Какое исполнение закуплено, когда правила этого не решают.
+
+    Правила видят три случая: исполнение названо в выбранном заказчиком,
+    названо соседнее, или в наименовании по РУ перечислены все сразу. Третий
+    они разрешить не могут — «варианты исполнения: AJ11, AJ12, AJ15, AJ16,
+    AJ18» и товарный знак «AJAX» не говорят, что поставлено. Здесь модель
+    читает текст целиком и называет исполнение, если оно там всё-таки есть —
+    «в комплектации AJ-15», «исп. 15», строка в характеристиках.
+
+    Ни одного поля отчёта она не заполняет: ответ принимается, только если
+    цитата дословно нашлась в тексте позиции и обозначение стоит в самой
+    цитате. Что искал человек, модели не говорят — сравнивает программа."""
+
+    from .config import ai_options
+    from .enrich.aimatch import (AiAnswer, AiCache, Gateway, VARIANT_KIND,
+                                 VariantAnswer, pick_variant, question,
+                                 variant_supported)
+    from .query import norm, parse
+
+    doubtful = [r for r in rows if r.pos.match_doubt == "исполнение"]
+    if not doubtful or not text:
+        return rows
+    opts = ai_options()
+    if not opts["key"]:
+        return rows
+
+    wanted: set[str] = set()
+    for phrase in text:
+        wanted |= {a.key for a in parse(phrase).articles}
+    if not wanted:
+        return rows
+
+    todo: dict[str, list[Position]] = {}
+    for r in doubtful:
+        todo.setdefault(question(r.pos.contract_text(), r.pos.specs_text),
+                        []).append(r.pos)
+    asked = list(todo)[:AI_MAX_VARIANTS]
+    stats = {"сомнительных строк": len(doubtful), "спрошено": len(asked),
+             "исполнение подтверждено": 0, "поставлено другое": 0,
+             "модель промолчала": 0, "цитата не подтвердилась": 0,
+             "ошибок шлюза": 0}
+
+    progress("ИИ", "спрашиваю ИИ, какое исполнение закуплено", 0, len(asked))
+    verdicts: dict[str, str] = {}
+    async with Gateway(opts["key"], opts["model"], opts["base"]) as gw:
+        if gw.problem:
+            return rows
+        cache = AiCache(settings.cache_db) if settings.cache_enabled else None
+        try:
+            async def one(q: str):
+                if cache is not None:
+                    hit = await cache.get(gw.model, q, VARIANT_KIND)
+                    if hit is not None:
+                        return q, VariantAnswer(variant=hit.ru_number,
+                                                quote=hit.quote, why=hit.why)
+                ans = await pick_variant(q, gw.ask)
+                if cache is not None and not ans.error:
+                    await cache.put(gw.model, q,
+                                    AiAnswer(ru_number=ans.variant,
+                                             quote=ans.quote, why=ans.why),
+                                    VARIANT_KIND)
+                return q, ans
+
+            done = 0
+            for coro in asyncio.as_completed([one(q) for q in asked]):
+                q, ans = await coro
+                done += 1
+                progress("ИИ", f"{done} из {len(asked)}", done, len(asked))
+                if ans.error:
+                    stats["ошибок шлюза"] += 1
+                    continue
+                if not ans.answered:
+                    stats["модель промолчала"] += 1
+                    continue
+                if not variant_supported(ans, q):
+                    stats["цитата не подтвердилась"] += 1
+                    continue
+                key = norm(ans.variant)
+                verdicts[q] = key
+        finally:
+            if cache is not None:
+                cache.close()
+        stats.update(gw.spent())
+
+    drop: set[int] = set()
+    for q, key in verdicts.items():
+        ours = any(w == key or w in key or key in w for w in wanted)
+        for p in todo.get(q, ()):
+            if ours:
+                p.match_doubt = ""
+                p.match_note = (f"{p.match_note.split(':')[0]}: исполнение "
+                                f"{_as_written(key, q)} названо в тексте (ИИ)")
+                stats["исполнение подтверждено"] += 1
+            else:
+                drop.add(id(p))
+                stats["поставлено другое"] += 1
+    result.stats["ИИ: исполнение"] = stats
+    if stats["поставлено другое"]:
+        result.problems.append(Problem(
+            "—", "отбор",
+            f"{stats['поставлено другое']} строк убрано: в наименовании по РУ "
+            "перечислены все исполнения регистрации, а в тексте контракта "
+            "названо другое — не то, что искали. Проверено дословной цитатой "
+            "из самого контракта"))
+    if stats["исполнение подтверждено"]:
+        result.problems.append(Problem(
+            "—", "отбор",
+            f"у {stats['исполнение подтверждено']} строк исполнение "
+            "подтверждено по тексту контракта: оговорка «только в перечне "
+            "исполнений РУ» с них снята"))
+    return [r for r in rows if id(r.pos) not in drop]
+
+
+def _as_written(key: str, question_text: str) -> str:
+    """Как исполнение написано в самом контракте — для подписи в отчёте.
+
+    В ответе модели оно может быть записано иначе («AJ-15»), а в колонке
+    должно стоять то, что человек найдёт в тексте позиции."""
+
+    from .query import norm
+
+    for word in re.findall(r"[0-9A-Za-zА-Яа-яЁё-]+", question_text or ""):
+        if norm(word) == key:
+            return word
+    return key.upper()
 
 
 def _note_registry_gaps(rows: list[Row], result: RunResult) -> None:

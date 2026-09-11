@@ -91,6 +91,12 @@ SOURCE = "ИИ + реестр РЗН"
 # ключ: прежние ответы остаются в кэше, но новых вопросов не закрывают.
 PROTOCOL = "2"
 
+# Имя пространства в кэше. Ответы уговора №2 записаны с пустым именем — так
+# сложилось, и переименовывать их значит выбросить оплаченное. Начиная со
+# следующего уговора номер входит в ключ; у проходов, появившихся позже,
+# имя своё (см. VARIANT_KIND).
+NAMESPACE = "" if PROTOCOL == "2" else PROTOCOL
+
 
 @dataclass(slots=True)
 class AiAnswer:
@@ -187,6 +193,90 @@ def question(text: str, specs: str = "") -> str:
     if specs:
         parts.append("Характеристики: " + specs[:SPECS_CHARS])
     return "\n".join(p for p in parts if p)
+
+
+# ── какое исполнение закупается ────────────────────────────────────────────
+
+# Второй, совсем другой вопрос к модели: не «где искать в реестре», а «что
+# написано в самом контракте». Правила разбирают текст по словам и потому
+# спотыкаются на живом языке — «в комплектации AJ-15», «исп. 15», «Вариант
+# исполнения» в характеристиках. Модель читает, а не токенизирует.
+#
+# Источником факта она и здесь не становится: ответ принимается, только если
+# цитата дословно нашлась в тексте позиции и обозначение действительно стоит
+# в этой цитате. Что искал человек, модели не говорят — иначе она будет
+# соглашаться с подсказкой; сравнивает программа, уже после ответа.
+VARIANT_KIND = "исполнение-1"
+
+VARIANT_PROMPT = """Ты читаешь позицию из российского госконтракта и отвечаешь на один вопрос:
+какое исполнение (вариант, модель, артикул) изделия закупается по этой позиции.
+
+Отвечай ТОЛЬКО одним JSON-объектом, без пояснений:
+  {"исполнение": "<обозначение так, как оно написано в тексте>",
+   "цитата": "<дословный кусок текста, где это написано>"}
+  {"исполнение": null, "почему": "коротко"} — если в тексте этого нет.
+
+Правила:
+- бери только написанное. Не выводи исполнение из состава, характеристик или
+  из того, что бывает у этого производителя;
+- «варианты исполнения: AJ11, AJ12, AJ15» — это перечень всей регистрации, а
+  не выбор заказчика. Если ничего другого в тексте нет, отвечай null;
+- выбранное исполнение обычно стоит в наименовании позиции, в товарном знаке
+  или в характеристиках («Вариант исполнения: AJ15», «в комплектации AJ-15»);
+- цитата должна быть дословной: по ней программа проверяет ответ.
+  Пустой ответ лучше выдуманного."""
+
+
+@dataclass(slots=True)
+class VariantAnswer:
+    """Что модель вычитала про исполнение — до проверок."""
+
+    variant: str = ""
+    quote: str = ""
+    why: str = ""
+    error: str = ""
+
+    @property
+    def answered(self) -> bool:
+        return bool(self.variant)
+
+
+async def pick_variant(text: str, ask: Ask) -> VariantAnswer:
+    """Один вопрос, один ответ: никаких поисков, никакого диалога."""
+
+    messages = [{"role": "system", "content": VARIANT_PROMPT},
+                {"role": "user", "content": text}]
+    try:
+        raw = await ask(messages)
+    except Exception as e:
+        log.debug("шлюз ИИ (исполнение): %s: %s", type(e).__name__, e)
+        return VariantAnswer(error=f"{type(e).__name__}: {e}")
+    reply = parse_reply(raw)
+    if not reply:
+        return VariantAnswer(error="ответ модели не разобран")
+    value = reply.get("исполнение")
+    if not value:
+        return VariantAnswer(why=str(reply.get("почему") or ""))
+    return VariantAnswer(variant=str(value).strip(),
+                         quote=str(reply.get("цитата") or ""))
+
+
+def variant_supported(answer: VariantAnswer, text: str) -> bool:
+    """Цитата — из текста позиции, и обозначение стоит в самой цитате.
+
+    Первое ловит выдумку, второе — цитату не по делу: без него сгодился бы
+    любой кусок текста, а названо в нём было бы что угодно."""
+
+    from ..query import article_keys, norm
+
+    if not (answer.variant and answer.quote):
+        return False
+    if not quote_supported(answer.quote, text):
+        return False
+    key = norm(answer.variant)
+    if not key:
+        return False
+    return any(key == k or key in k for k in article_keys(answer.quote))
 
 
 def _found(search, limit: int = 0) -> str:
@@ -443,16 +533,19 @@ class AiCache:
             self._db = None
 
     @staticmethod
-    def _key(model: str, text: str) -> str:
-        return hashlib.sha1(f"{model}\x00{text}".encode("utf-8")).hexdigest()
+    def _key(model: str, text: str, kind: str = NAMESPACE) -> str:
+        head = f"{kind}\x00{model}" if kind else model
+        return hashlib.sha1(f"{head}\x00{text}".encode("utf-8")).hexdigest()
 
-    async def get(self, model: str, text: str) -> Optional[AiAnswer]:
+    async def get(self, model: str, text: str,
+                  kind: str = NAMESPACE) -> Optional[AiAnswer]:
         async with self._lock:
-            return await asyncio.to_thread(self._get, model, text)
+            return await asyncio.to_thread(self._get, model, text, kind)
 
-    def _get(self, model: str, text: str) -> Optional[AiAnswer]:
+    def _get(self, model: str, text: str,
+             kind: str = NAMESPACE) -> Optional[AiAnswer]:
         row = self._conn().execute("SELECT payload FROM ai WHERE key=?",
-                                   (self._key(model, text),)).fetchone()
+                                   (self._key(model, text, kind),)).fetchone()
         if not row:
             return None
         try:
@@ -463,16 +556,18 @@ class AiCache:
                            ("ru_number", "quote", "confidence", "why")},
                         steps=int(data.get("steps") or 0))
 
-    async def put(self, model: str, text: str, answer: AiAnswer) -> None:
+    async def put(self, model: str, text: str, answer: AiAnswer,
+                  kind: str = NAMESPACE) -> None:
         async with self._lock:
-            await asyncio.to_thread(self._put, model, text, answer)
+            await asyncio.to_thread(self._put, model, text, answer, kind)
 
-    def _put(self, model: str, text: str, answer: AiAnswer) -> None:
+    def _put(self, model: str, text: str, answer: AiAnswer,
+             kind: str = NAMESPACE) -> None:
         payload = {"ru_number": answer.ru_number, "quote": answer.quote,
                    "confidence": answer.confidence, "why": answer.why,
                    "steps": answer.steps}
         db = self._conn()
         db.execute("INSERT OR REPLACE INTO ai(key, payload, ts) VALUES (?,?,?)",
-                   (self._key(model, text),
+                   (self._key(model, text, kind),
                     json.dumps(payload, ensure_ascii=False), int(time.time())))
         db.commit()

@@ -53,7 +53,7 @@ PREFIX_MAX = 5
 _STANDALONE = re.compile(r"^[a-z]{2,}\d")
 
 
-def _norm(word: str) -> str:
+def norm(word: str) -> str:
     """Слово в сравнимый вид: кириллица латиницей, регистр и знаки прочь.
 
     Через латиницу проходят и кириллические двойники: «АJ15», набранное с
@@ -107,7 +107,7 @@ def parse(phrase: str) -> Query:
         words.append(w)
         i += 1
     for w in words:
-        k = _norm(w)
+        k = norm(w)
         if not k:
             continue
         if re.search(r"\d", k):
@@ -141,12 +141,12 @@ def article_keys(text: str) -> set[str]:
     out: set[str] = set()
     spans = [m for m in _WORD.finditer(text or "")]
     for i, m in enumerate(spans):
-        k = _norm(m.group(0))
+        k = norm(m.group(0))
         if k and re.search(r"\d", k):
             out.add(k)
         glue = _glue(text or "", spans, i)
         if glue:
-            out.add(_norm(glue))
+            out.add(norm(glue))
     return out
 
 

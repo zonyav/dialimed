@@ -779,6 +779,85 @@ check("точность посчитана", _РЕЗ.stats["ИИ"]["точнос
 check("и сказана словами",
       any("в отчёт не пошли" in p.message for p in _РЕЗ.problems), True)
 
+print("\n ИИ: какое исполнение закуплено")
+from app.enrich.aimatch import VariantAnswer, pick_variant, variant_supported
+
+_ТЕКСТ = ("Установка стоматологическая. Наименование по РУ: варианты "
+          "исполнения: AJ11, AJ12, AJ15, AJ16, AJ18. Поставляется в "
+          "комплектации AJ-15 с принадлежностями")
+
+
+def _исполнение(ответ):
+    async def ask(_messages):
+        return ответ
+    return _asyncio.run(pick_variant(_ТЕКСТ, ask))
+
+
+_ИСП = _исполнение('{"исполнение": "AJ-15", "цитата": "в комплектации AJ-15 '
+                   'с принадлежностями"}')
+check("модель называет исполнение и цитату", (_ИСП.variant, _ИСП.answered),
+      ("AJ-15", True))
+check("цитата из текста — ответ принят", variant_supported(_ИСП, _ТЕКСТ), True)
+check("выдуманная цитата — ответ отброшен",
+      variant_supported(VariantAnswer(variant="AJ15",
+                                      quote="поставляется исполнение "
+                                            "модели ЭГД-70П"), _ТЕКСТ), False)
+check("цитата не про то — ответ отброшен",
+      variant_supported(VariantAnswer(variant="AJ15",
+                                      quote="Установка стоматологическая"),
+                        _ТЕКСТ), False)
+check("молчание — не ответ",
+      _исполнение('{"исполнение": null, "почему": "перечень регистрации"}')
+      .answered, False)
+
+
+def _исполнения(rows, ответы):
+    global _ОТВЕТЫ
+    _ОТВЕТЫ = ответы
+    было_gw, был_опрос = _am.Gateway, _cfg.ai_options
+    было_кэш = _cfg.settings.cache_enabled
+    _am.Gateway = _Шлюз
+    _cfg.ai_options = lambda: {"key": "sk-тест", "model": "тест", "base": "",
+                               "enabled": True}
+    _cfg.settings.cache_enabled = False
+    res = RunResult()
+    try:
+        left = _asyncio.run(_pl._ai_pick_variant(rows, ["Ajax AJ15"], res,
+                                                 lambda *a: None))
+    finally:
+        _am.Gateway, _cfg.ai_options = было_gw, был_опрос
+        _cfg.settings.cache_enabled = было_кэш
+    return left, res
+
+
+def _сомнительная(name, **kw):
+    p = Position(name=name, match_doubt="исполнение",
+                 match_note="Ajax AJ15: модель только в перечне исполнений РУ",
+                 **kw)
+    return Row(ContractMeta(), p)
+
+
+_НАША = _сомнительная("Установка стоматологическая",
+                      ru_name="варианты исполнения: AJ11, AJ12, AJ15",
+                      specs=[("Вариант исполнения", "AJ-15")])
+_ЧУЖАЯ = _сомнительная("Установка стоматологическая",
+                       ru_name="варианты исполнения: AJ11, AJ12, AJ15",
+                       specs=[("Вариант исполнения", "AJ11")])
+_ЛЕВЫЕ, _РЕЗ_И = _исполнения(
+    [_НАША, _ЧУЖАЯ],
+    {question(_НАША.pos.contract_text(), _НАША.pos.specs_text):
+        '{"исполнение": "AJ-15", "цитата": "Вариант исполнения: AJ-15"}',
+     question(_ЧУЖАЯ.pos.contract_text(), _ЧУЖАЯ.pos.specs_text):
+        '{"исполнение": "AJ11", "цитата": "Вариант исполнения: AJ11"}'})
+
+check("строка с чужим исполнением убрана", len(_ЛЕВЫЕ), 1)
+check("осталась наша", _ЛЕВЫЕ[0].pos.specs, [("Вариант исполнения", "AJ-15")])
+check("оговорка с неё снята", _ЛЕВЫЕ[0].pos.match_doubt, "")
+check("и подпись говорит, откуда это известно",
+      "названо в тексте (ИИ)" in _ЛЕВЫЕ[0].pos.match_note, True)
+check("убранное посчитано",
+      _РЕЗ_И.stats["ИИ: исполнение"]["поставлено другое"], 1)
+
 RU = "РЗН 2024/23069"
 check("обрывок достроен — исполнение в перечне реестра",
       _marks_after([(RU, "АРМЕД"), (RU, "АРМЕД"), (RU, "АРМЕД-230")],
