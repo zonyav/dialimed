@@ -199,6 +199,10 @@ def main() -> int:
                     help="дособрать по кодам КТРУ найденных позиций: медленно, "
                          "но достаёт контракты, где модель записана только в "
                          "наименовании по РУ — такие ЕИС словом не находит")
+    ap.add_argument("--with-services", action="store_true",
+                    help="оставить в отчёте обслуживание, ремонт и поверку. "
+                         "По умолчанию такие строки исключаются: модель в них "
+                         "названа верно, но цена — за работу, а не за изделие")
     ap.add_argument("--words-too", action="store_true",
                     help="когда задан код: спрашивать ЕИС ещё и словами бренда "
                          "и номером РУ. По умолчанию код задаёт область поиска, "
@@ -274,6 +278,7 @@ def main() -> int:
         use_ai=args.ai,
         sweep_codes=args.sweep,
         only_codes=not args.words_too,
+        drop_services=not args.with_services,
     )
 
     if codes:

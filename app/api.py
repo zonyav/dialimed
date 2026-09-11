@@ -156,6 +156,7 @@ class RunRequest(BaseModel):
     use_ai: bool = False
     sweep_codes: bool = False
     only_codes: bool = True
+    drop_services: bool = True
 
 
 class AiRequest(BaseModel):
@@ -440,6 +441,7 @@ async def start(req: RunRequest) -> dict:
         use_ai=bool(req.use_ai),
         sweep_codes=bool(req.sweep_codes),
         only_codes=bool(req.only_codes),
+        drop_services=bool(req.drop_services),
     )
     job = Job(id=uuid.uuid4().hex[:12], params=params, note=describe(params))
     JOBS[job.id] = job

@@ -66,6 +66,7 @@ class SearchParams:
     text: list[str] = field(default_factory=list)
     sweep_codes: bool = False
     only_codes: bool = True
+    drop_services: bool = True
 
     @property
     def empty(self) -> bool:
@@ -97,6 +98,8 @@ def describe(params: SearchParams) -> str:
     if params.ktru and (params.ru or params.text):
         parts.append("только внутри кодов" if params.only_codes
                      else "и словами по всему ЕИС")
+    if not params.drop_services:
+        parts.append("с обслуживанием и ремонтом")
     return ("; ".join(parts) + f"; период с {params.date_from}"
             f"{' по ' + params.date_to if params.date_to else ''}; "
             f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}"
@@ -227,7 +230,8 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
         await _fill_nmck(client, [m for m, _ in parsed], result, progress)
 
         rows = _collect_rows(parsed, wanted, result,
-                             ru=params.ru, text=params.text)
+                             ru=params.ru, text=params.text,
+                             drop_services=params.drop_services)
         if params.sweep_codes:
             rows += await _sweep_by_codes(client, rows, params, result,
                                           progress, set(metas))
@@ -240,7 +244,7 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
             "галочку «искать только внутри кодов» — тогда ЕИС спросят ещё и "
             "словами, но там находится лишь то, что написано в наименовании "
             "объекта закупки или в товарном знаке"))
-    _note_services(rows, result)
+    _note_services(rows, result, dropped=params.drop_services)
     await _enrich(rows, result, progress, use_ai=params.use_ai,
                   text=params.text)
 
@@ -335,6 +339,75 @@ async def _load_many(client: EisClient, items: list[ContractMeta],
     return out
 
 
+# Коды ищем с этой даты, как бы узко ни был заказан отчёт: код КТРУ у изделия
+# не меняется от года, а вот в одном отдельно взятом году поставок может не
+# оказаться вовсе. Разбираем не больше SWEEP_DISCOVER контрактов — коды
+# повторяются, и десятого контракта обычно хватает.
+SWEEP_FROM = "01.01.2025"
+SWEEP_DISCOVER = 60
+
+
+def _earlier(a: str, b: str) -> bool:
+    """Дата «ДД.ММ.ГГГГ» строго раньше другой такой же."""
+
+    def key(s: str) -> tuple:
+        parts = (s or "").split(".")
+        return tuple(int(x) for x in reversed(parts)) if len(parts) == 3 else ()
+
+    ka, kb = key(a), key(b)
+    return bool(ka and kb and ka < kb)
+
+
+async def _codes_from_earlier(client: EisClient, params: SearchParams,
+                              result: RunResult, progress: Progress,
+                              seen: set[str]) -> list[str]:
+    """Коды КТРУ из контрактов, которые лежат раньше заказанного периода.
+
+    Строки оттуда в отчёт не попадают: нужны только коды, чтобы было что
+    обходить. Отбор тот же, что и в отчёте, — код чужого изделия из того же
+    контракта не возьмётся."""
+
+    if not params.text or not _earlier(SWEEP_FROM, params.date_from):
+        return []
+
+    plan = [q for q in plan_queries(SearchParams(
+        text=params.text, ru=params.ru, stages=params.stages))
+        if q.kind != "КТРУ"]
+    metas: dict[str, ContractMeta] = {}
+    for q in plan:
+        try:
+            found, _total = await search_text(
+                client, q.value, date_from=SWEEP_FROM, date_to=params.date_from,
+                stages=params.stages, limit=0)
+        except Exception as e:
+            result.problems.append(Problem(q.value, "поиск",
+                                           f"{type(e).__name__}: {e}"))
+            continue
+        for m in found:
+            if m.reestr_number not in seen:
+                metas.setdefault(m.reestr_number, m)
+    if not metas:
+        return []
+
+    # поставки вперёд обслуживания: объект закупки написан прямо на странице
+    # поиска, и у ремонта кода КТРУ обычно нет вовсе
+    items = sorted(metas.values(),
+                   key=lambda m: (_SERVICE_RE.match(m.first_object or "") is not None,
+                                  -(m.conclusion_date.toordinal()
+                                    if m.conclusion_date else 0)))[:SWEEP_DISCOVER]
+    progress("добор", f"ищу коды КТРУ в контрактах с {SWEEP_FROM}: "
+                      f"{len(items)} из {len(metas)}", 0, len(items))
+    scratch = RunResult()
+    parsed = await _load_many(client, items, scratch, progress, "добор")
+    got = _collect_rows(parsed, set(), scratch, ru=params.ru, text=params.text,
+                        drop_services=True)
+    codes = sorted({r.pos.ktru for r in got if r.pos.ktru})
+    result.stats["коды из контрактов раньше периода"] = {
+        "контрактов посмотрено": len(items), "кодов найдено": len(codes),
+        "с даты": SWEEP_FROM}
+    return codes
+
+
 async def _sweep_by_codes(client: EisClient, rows: list[Row],
                           params: SearchParams, result: RunResult,
                           progress: Progress,
@@ -350,6 +423,16 @@ async def _sweep_by_codes(client: EisClient, rows: list[Row],
     Это дорого — у кода бывают тысячи контрактов, — поэтому только по просьбе
     («Дособрать по кодам»), и каждый код называется вслух вместе с числом
     контрактов, чтобы прогон можно было остановить.
+
+    Откуда берутся сами коды — отдельный вопрос, и узкий период на нём
+    спотыкается. Замерено на «МАИА-01» за 2026 год: семь контрактов, все до
+    одного — обслуживание и ремонт, и ни в одном нет кода КТРУ, так что
+    добирать было нечего. Те же слова с 01.01.2025 дают пятнадцать контрактов,
+    среди них настоящие поставки с кодами 32.50.21.121-00000119 и -00000102.
+    Поэтому коды ищутся за весь период с `SWEEP_FROM`, даже когда отчёт
+    заказан за один год: разбираются только первые `SWEEP_DISCOVER` контрактов
+    (коды повторяются быстро), строки из них в отчёт не идут — берутся
+    исключительно коды.
     """
 
     from collections import Counter
@@ -357,6 +440,9 @@ async def _sweep_by_codes(client: EisClient, rows: list[Row],
     codes = [c for c, _n in Counter(
         r.pos.ktru for r in rows if r.pos.ktru).most_common()
         if c not in set(params.ktru)]
+    codes += [c for c in await _codes_from_earlier(client, params, result,
+                                                   progress, seen)
+              if c not in codes and c not in set(params.ktru)]
     if not codes:
         return []
 
@@ -382,7 +468,8 @@ async def _sweep_by_codes(client: EisClient, rows: list[Row],
     items = list(extra.values())
     parsed = await _load_many(client, items, result, progress, "добор")
     await _fill_nmck(client, [m for m, _ in parsed], result, progress)
-    more = _collect_rows(parsed, set(), result, ru=params.ru, text=params.text)
+    more = _collect_rows(parsed, set(), result, ru=params.ru, text=params.text,
+                         drop_services=params.drop_services)
     result.stats["добор по кодам"] = {"кодов": len(codes),
                                       "контрактов": len(items),
                                       "строк": len(more)}
@@ -422,7 +509,8 @@ def _name_key(s: str) -> str:
 
 def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
                   wanted: set[str], result: RunResult,
-                  ru: Iterable[str] = (), text: Iterable[str] = ()) -> list[Row]:
+                  ru: Iterable[str] = (), text: Iterable[str] = (),
+                  drop_services: bool = False) -> list[Row]:
     """Отбор позиций под запрос.
 
     Условия пересекаются: код КТРУ, номер РУ и бренд, если заполнены, должны
@@ -448,6 +536,7 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
     no_match = 0
     no_code = 0
     off_query = 0
+    services = 0
     by_name: list[tuple[str, str]] = []
     only_matching = bool(wanted)
 
@@ -492,6 +581,18 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
             fits = [p for p in take if wanted_here(p)]
             off_query += len(take) - len(fits)
             take = fits
+        if drop_services:
+            # обслуживание, ремонт и поверка приходят вместе с поставками —
+            # модель в них названа честно, но цена там за работу, а не за
+            # изделие. Убираем до обогащения: незачем искать производителя
+            # для строки, которой в отчёте не будет
+            keep = []
+            for p in take:
+                if _looks_like_service(p):
+                    services += 1
+                else:
+                    keep.append(p)
+            take = keep
         for p in take:
             if not p.ru_number:
                 src = p.ru_name or p.name
@@ -516,6 +617,7 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
                 f"наименования: заказчик не заполнил код КТРУ"))
     count("контрактов без искомого КТРУ", no_match)
     count("позиций мимо запроса", off_query)
+    count("строк обслуживания и ремонта исключено", services)
     count("модель только в перечне исполнений РУ",
           sum(1 for r in rows if r.pos.match_doubt == "исполнение"))
     count("бренд в контракте не назван",
@@ -530,15 +632,31 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
 _SERVICE_RE = re.compile(
     r"^\s*(?:оказание\s+услуг|услуг[аи]?\b|техническо[ем]\s+обслуживани|"
     r"обслуживани|ремонт|контроль\s+технического|поверк|калибровк|монтаж|"
-    r"пусконаладк|демонтаж|утилизац|аренд|поставка\s+запасных)", re.I)
+    r"пусконаладк|демонтаж|утилизац|аренд|поставка\s+запасных|"
+    # «Текущий ремонт:: Аппарат …» — ремонт, названный прилагательным вперёд:
+    # на прогоне по «МАИА-01» такая строка единственная прошла как поставка
+    r"(?:текущ|капитальн|планов|внепланов|аварийн|срочн)\w*\s+ремонт)", re.I)
 
 
 def _looks_like_service(pos: Position) -> bool:
     return bool(_SERVICE_RE.match(pos.name or ""))
 
 
-def _note_services(rows: list[Row], result: RunResult) -> None:
+def _note_services(rows: list[Row], result: RunResult,
+                   dropped: bool = False) -> None:
 
+    if dropped:
+        n = result.stats.get("строк обслуживания и ремонта исключено", 0)
+        if not n:
+            return
+        result.problems.append(Problem(
+            "—", "отбор",
+            f"{n} строк — обслуживание, ремонт, поверка или калибровка — в "
+            f"отчёт не попали: цена там за работу, а не за изделие. Если "
+            f"нужны и они, снимите галочку «только поставки»"
+            + (". Поставок по запросу не нашлось вовсе — за этот период "
+               "изделие только обслуживали" if not rows else "")))
+        return
     n = sum(1 for r in rows if _looks_like_service(r.pos))
     if not n or not rows:
         return

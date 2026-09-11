@@ -213,6 +213,15 @@ def parse_search_page(html: str) -> list[ContractMeta]:
         if m:
             meta.contract_number = m.group(1)
 
+        # объект закупки виден уже здесь: «Техническое обслуживание…» можно
+        # узнать, не скачивая контракт. Показан только первый из них, поэтому
+        # это подсказка, а не приговор — по ней ничего не выбрасывают
+        m = re.search(r"Объекты закупки\s+(.{3,300}?)\s*"
+                      r"(?:Посмотреть все\s*\((\d+)\)|Цена контракта|$)", flat)
+        if m:
+            meta.first_object = m.group(1).strip(" .,\"'«»")
+            meta.objects_total = int(m.group(2) or 1)
+
         m = re.search(r"\(ИКЗ\)\s*(\d{30,40})", flat) or re.search(r"\b(\d{36})\b", flat)
         if m:
             meta.ikz = m.group(1)

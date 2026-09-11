@@ -44,6 +44,10 @@ class ContractMeta:
     nmck_note: str = ""
     amended: bool = False
     placing_way: str = ""
+    # первый объект закупки — он написан прямо на странице поиска, ещё до
+    # того, как контракт скачан. По нему видно, поставка это или ремонт
+    first_object: str = ""
+    objects_total: int = 0
     source: str = ""
     source_ref: str = ""
 

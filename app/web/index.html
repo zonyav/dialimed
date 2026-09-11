@@ -393,13 +393,24 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
       знаке.</div>
 
     <label class="chk" style="margin-top:18px;display:block">
+      <input type="checkbox" id="onlySupply" checked> Только поставки
+    </label>
+    <div class="hint">Обслуживание, ремонт, поверка и калибровка в отчёт не
+      попадают: модель в них названа верно, но цена там за работу, а не за
+      изделие. Сколько строк убрано — скажет сводка. По «МАИА-01» за 2026 год
+      такими оказались все одиннадцать строк до единой.</div>
+
+    <label class="chk" style="margin-top:18px;display:block">
       <input type="checkbox" id="sweep"> Дособрать по кодам КТРУ найденных позиций
     </label>
     <div class="hint">Второй заход после поиска словом: берёт коды КТРУ из
       найденных строк целиком и отбирает из них те же позиции. Так находятся
       контракты, где модель написана только в «наименовании по РУ» — их ЕИС
       словом не находит (на прогоне по «рускан 70п» это два контракта из ста
-      проверенных). Медленно: у кода бывают тысячи контрактов.</div>
+      проверенных). Коды при этом ищутся с 01.01.2025, даже если отчёт заказан
+      за один год: в узком периоде поставок может не оказаться вовсе, а код
+      изделия от года не меняется. Медленно: у кода бывают тысячи
+      контрактов.</div>
 
     <div class="stack" style="margin-top:14px">
       <button id="checkKtru" class="quiet small" type="button">Проверить запрос</button>
@@ -785,6 +796,7 @@ function params(){
     limit_per_ktru: Number($('#limit').value || 0),
     sweep_codes: $('#sweep').checked,
     only_codes: $('#onlyCodes').checked,
+    drop_services: $('#onlySupply').checked,
     use_ai: $('#useAi').checked && AI.has_key,
   };
 }
