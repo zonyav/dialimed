@@ -195,6 +195,10 @@ def main() -> int:
     ap.add_argument("--ai", action="store_true",
                     help="искать производителя через ИИ там, где правила молчат "
                          "(нужен ключ, см. веб-интерфейс)")
+    ap.add_argument("--sweep", action="store_true",
+                    help="дособрать по кодам КТРУ найденных позиций: медленно, "
+                         "но достаёт контракты, где модель записана только в "
+                         "наименовании по РУ — такие ЕИС словом не находит")
     ap.add_argument("--limit", type=int, default=0,
                     help="максимум контрактов на один код КТРУ (0 — без ограничения)")
     ap.add_argument("--out", "-o", help="путь к файлу отчёта .xlsx")
@@ -264,6 +268,7 @@ def main() -> int:
         stages=[s.strip() for s in args.stages.split(",") if s.strip()],
         limit_per_ktru=max(0, args.limit),
         use_ai=args.ai,
+        sweep_codes=args.sweep,
     )
 
     if codes:

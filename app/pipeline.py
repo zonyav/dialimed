@@ -55,6 +55,7 @@ class SearchParams:
     use_ai: bool = False
     ru: list[str] = field(default_factory=list)
     text: list[str] = field(default_factory=list)
+    sweep_codes: bool = False
 
     @property
     def empty(self) -> bool:
@@ -80,6 +81,7 @@ def describe(params: SearchParams) -> str:
     return ("; ".join(parts) + f"; период с {params.date_from}"
             f"{' по ' + params.date_to if params.date_to else ''}; "
             f"стадии: {', '.join(STAGES.get(s, s) for s in params.stages)}"
+            f"{'; с добором по кодам' if params.sweep_codes else ''}"
             f"{'; с поиском через ИИ' if params.use_ai else ''}")
 
 
@@ -197,36 +199,16 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
             return result
 
         items = list(metas.values())
-        progress("контракты", "загрузка контрактов", 0, len(items))
-        done = 0
-        lock = asyncio.Lock()
-        sem = asyncio.Semaphore(settings.eis_concurrency)
-        parsed: list[tuple[ContractMeta, list[Position]]] = []
-
-        async def one(meta: ContractMeta):
-            nonlocal done
-            async with sem:
-                out = await _load_contract(client, meta, result)
-            async with lock:
-                done += 1
-                progress("контракты", f"{done} из {len(items)}", done, len(items))
-            return out
-
-        for meta, chunk in zip(items, await asyncio.gather(
-                *(one(m) for m in items), return_exceptions=True)):
-            if isinstance(chunk, BaseException):
-                result.problems.append(Problem(
-                    meta.reestr_number, "загрузка",
-                    f"{type(chunk).__name__}: {chunk}"))
-                log.warning("контракт %s: %s", meta.reestr_number, chunk)
-            elif chunk:
-                parsed.append(chunk)
-
+        parsed = await _load_many(client, items, result, progress, "контракты")
         result.stats["разбор контрактов"] = _source_stats(parsed)
         await _fill_nmck(client, [m for m, _ in parsed], result, progress)
 
-    rows = _collect_rows(parsed, wanted, result,
-                         ru=params.ru, text=params.text)
+        rows = _collect_rows(parsed, wanted, result,
+                             ru=params.ru, text=params.text)
+        if params.sweep_codes:
+            rows += await _sweep_by_codes(client, rows, params, result,
+                                          progress, set(metas))
+
     _note_services(rows, result)
     await _enrich(rows, result, progress, use_ai=params.use_ai)
 
@@ -287,6 +269,92 @@ async def _load_contract(client: EisClient, meta: ContractMeta,
         result.problems.append(
             Problem(meta.reestr_number, "разбор", f"{note}; ПФ: {type(e).__name__}: {e}"))
         return None
+
+
+async def _load_many(client: EisClient, items: list[ContractMeta],
+                     result: RunResult, progress: Progress,
+                     stage: str) -> list[tuple[ContractMeta, list[Position]]]:
+    """Скачать и разобрать пачку контрактов, не роняя прогон на одном плохом."""
+
+    done = 0
+    lock = asyncio.Lock()
+    sem = asyncio.Semaphore(settings.eis_concurrency)
+    out: list[tuple[ContractMeta, list[Position]]] = []
+    progress(stage, "загрузка контрактов", 0, len(items))
+
+    async def one(meta: ContractMeta):
+        nonlocal done
+        async with sem:
+            got = await _load_contract(client, meta, result)
+        async with lock:
+            done += 1
+            progress(stage, f"{done} из {len(items)}", done, len(items))
+        return got
+
+    for meta, chunk in zip(items, await asyncio.gather(
+            *(one(m) for m in items), return_exceptions=True)):
+        if isinstance(chunk, BaseException):
+            result.problems.append(Problem(
+                meta.reestr_number, "загрузка",
+                f"{type(chunk).__name__}: {chunk}"))
+            log.warning("контракт %s: %s", meta.reestr_number, chunk)
+        elif chunk:
+            out.append(chunk)
+    return out
+
+
+async def _sweep_by_codes(client: EisClient, rows: list[Row],
+                          params: SearchParams, result: RunResult,
+                          progress: Progress,
+                          seen: set[str]) -> list[Row]:
+    """Второй заход: по кодам КТРУ, которые нашлись в первой волне.
+
+    Поиск словом упирается в то, что индексирует ЕИС. Замерено: из ста
+    контрактов кода 26.60.12.132-00000036, которых поиск по «рускан» не вернул,
+    два всё-таки про РуСкан 70П — модель там записана только в «наименовании по
+    РУ», а его ЕИС не ищет, и товарный знак пуст. Достать такие можно одним
+    способом: взять код целиком и отфильтровать самим.
+
+    Это дорого — у кода бывают тысячи контрактов, — поэтому только по просьбе
+    («Дособрать по кодам»), и каждый код называется вслух вместе с числом
+    контрактов, чтобы прогон можно было остановить.
+    """
+
+    from collections import Counter
+
+    codes = [c for c, _n in Counter(
+        r.pos.ktru for r in rows if r.pos.ktru).most_common()
+        if c not in set(params.ktru)]
+    if not codes:
+        return []
+
+    extra: dict[str, ContractMeta] = {}
+    for i, code in enumerate(codes, 1):
+        try:
+            found, total = await search_ktru(
+                client, code, date_from=params.date_from, date_to=params.date_to,
+                stages=params.stages, limit=params.limit_per_ktru)
+        except Exception as e:
+            result.problems.append(Problem(code, "поиск", f"{type(e).__name__}: {e}"))
+            continue
+        fresh = [m for m in found if m.reestr_number not in seen]
+        for m in fresh:
+            extra.setdefault(m.reestr_number, m)
+        progress("добор", f"КТРУ {code}: {total} контрактов, новых {len(fresh)}",
+                 i, len(codes))
+    if not extra:
+        result.stats["добор по кодам"] = {"кодов": len(codes), "контрактов": 0,
+                                          "строк": 0}
+        return []
+
+    items = list(extra.values())
+    parsed = await _load_many(client, items, result, progress, "добор")
+    await _fill_nmck(client, [m for m, _ in parsed], result, progress)
+    more = _collect_rows(parsed, set(), result, ru=params.ru, text=params.text)
+    result.stats["добор по кодам"] = {"кодов": len(codes),
+                                      "контрактов": len(items),
+                                      "строк": len(more)}
+    return more
 
 
 def _source_stats(parsed: list[tuple[ContractMeta, list[Position]]]) -> dict:
@@ -385,10 +453,14 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
                 if nums:
                     p.ru_number = pick_main_ru(src, nums, _type_hints(p))
             rows.append(Row(meta=meta, pos=p))
-    if skipped:
-        result.stats["позиций отфильтровано"] = skipped
-    if no_code:
-        result.stats["позиций без кода КТРУ"] = no_code
+    # счётчики накапливаются: добор по кодам зовёт отбор второй раз, и
+    # перезапись показала бы только вторую волну
+    def count(key: str, n: int) -> None:
+        if n:
+            result.stats[key] = result.stats.get(key, 0) + n
+
+    count("позиций отфильтровано", skipped)
+    count("позиций без кода КТРУ", no_code)
     if by_name:
         result.stats["взято по совпадению наименования"] = len(by_name)
         for reestr, name in by_name:
@@ -396,10 +468,8 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
                 reestr, "отбор",
                 f"позиция «{name}» взята в отчёт по дословному совпадению "
                 f"наименования: заказчик не заполнил код КТРУ"))
-    if no_match:
-        result.stats["контрактов без искомого КТРУ"] = no_match
-    if off_query:
-        result.stats["позиций мимо запроса"] = off_query
+    count("контрактов без искомого КТРУ", no_match)
+    count("позиций мимо запроса", off_query)
     return rows
 
 

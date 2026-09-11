@@ -380,6 +380,15 @@ button.small{padding:9px 16px;font-size:13.5px;border-radius:9px}
       закупки заказчики пишут номер РУ редко, одним им весь список не собрать —
       добавьте код КТРУ или НКМИ.</div>
 
+    <label class="chk" style="margin-top:18px;display:block">
+      <input type="checkbox" id="sweep"> Дособрать по кодам КТРУ найденных позиций
+    </label>
+    <div class="hint">Второй заход после поиска словом: берёт коды КТРУ из
+      найденных строк целиком и отбирает из них те же позиции. Так находятся
+      контракты, где модель написана только в «наименовании по РУ» — их ЕИС
+      словом не находит (на прогоне по «рускан 70п» это два контракта из ста
+      проверенных). Медленно: у кода бывают тысячи контрактов.</div>
+
     <div class="stack" style="margin-top:14px">
       <button id="checkKtru" class="quiet small" type="button">Проверить запрос</button>
       <span class="hint" id="checkHint" style="margin:0;flex:1;min-width:180px">Что это
@@ -762,6 +771,7 @@ function params(){
     date_to: $('#to').value.trim(),
     stages: stagesPicked(),
     limit_per_ktru: Number($('#limit').value || 0),
+    sweep_codes: $('#sweep').checked,
     use_ai: $('#useAi').checked && AI.has_key,
   };
 }
@@ -1016,6 +1026,7 @@ const STEP_NAMES = [
   ['НМЦК', 'Начальные цены закупок'],
   ['РЗН', 'Реестр Росздравнадзора'],
   ['вид', 'Срез реестра по коду вида'],
+  ['добор', 'Добор по кодам КТРУ'],
   ['завод', 'Поиск по названию завода'],
   ['ИИ', 'Поиск производителя через ИИ'],
 ];
@@ -1023,10 +1034,12 @@ let stepDone = new Set();
 /* шаг «ИИ» показываем только там, где он действительно будет: иначе список
    заканчивается пунктом, который никогда не отметится */
 let RUN_AI = false;
+let RUN_SWEEP = false;
 
 function renderSteps(active){
   $('#steps').innerHTML = STEP_NAMES.filter(
-      ([key]) => key !== 'ИИ' || RUN_AI).map(([key, title]) => {
+      ([key]) => (key !== 'ИИ' || RUN_AI) &&
+                 (key !== 'добор' || RUN_SWEEP)).map(([key, title]) => {
     const done = stepDone.has(key);
     const now = key === active;
     return '<li class="' + (done ? 'done' : (now ? 'now' : '')) + '">' +
@@ -1117,6 +1130,7 @@ async function startRun(){
   try{
     const res = await post('/api/run', p);
     RUN_AI = !!p.use_ai;
+    RUN_SWEEP = !!p.sweep_codes;
     $('#alerts').innerHTML = '';
     collapseForm(queryNote(p));
     attach(res.job);
@@ -1701,6 +1715,7 @@ async function boot(){
     const cur = await api('/api/current');
     if(cur.job){
       RUN_AI = (cur.note || '').indexOf('через ИИ') >= 0;
+      RUN_SWEEP = (cur.note || '').indexOf('с добором по кодам') >= 0;
       $('#ctx').textContent = cur.note || '';
       collapseForm(cur.note || 'идёт прогон');
       attach(cur.job);

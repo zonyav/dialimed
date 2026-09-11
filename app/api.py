@@ -154,6 +154,7 @@ class RunRequest(BaseModel):
     stages: list[str] = Field(default_factory=lambda: list(DEFAULT_STAGES))
     limit_per_ktru: int = 0
     use_ai: bool = False
+    sweep_codes: bool = False
 
 
 class AiRequest(BaseModel):
@@ -429,6 +430,7 @@ async def start(req: RunRequest) -> dict:
         stages=req.stages or list(DEFAULT_STAGES),
         limit_per_ktru=max(0, req.limit_per_ktru),
         use_ai=bool(req.use_ai),
+        sweep_codes=bool(req.sweep_codes),
     )
     job = Job(id=uuid.uuid4().hex[:12], params=params, note=describe(params))
     JOBS[job.id] = job
