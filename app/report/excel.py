@@ -82,6 +82,7 @@ LAYOUT: dict[str, tuple[int, str, Optional[str], bool]] = {
     "Цена контракта, ₽": (18, CENTER, MONEY, False),
     "НМЦК, ₽": (18, CENTER, MONEY, False),
     "Снижение, %": (26, LEFT, PERCENT, True),
+    "Совпадение с запросом": (34, LEFT, None, True),
     "Заказчик": (40, LEFT, None, True),
     "Поставщик": (34, LEFT, None, True),
     "ИНН поставщика": (16, CENTER, None, False),

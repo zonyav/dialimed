@@ -135,6 +135,9 @@ class Position:
     declarant_inn: str = ""
     mark: str = ""
     mark_source: str = ""
+    # почему строка в отчёте: какая строка запроса сошлась и с какой оговоркой
+    match_note: str = ""
+    match_doubt: str = ""   # «» | «исполнение» | «бренд»
     manufacturer_source: str = ""
     confidence: str = ""
     price: Optional[float] = None
@@ -222,6 +225,10 @@ class Row:
             # чисел, и когда оно не считается — видно, какого из них нет
             "НМЦК, ₽": m.nmck,
             "Снижение, %": m.discount_cell,
+            # почему строка здесь: по какой строке запроса она взята и что в
+            # этом совпадении неточного. Без этого «что попало в отчёт и
+            # почему» приходится выяснять чтением текста позиции
+            "Совпадение с запросом": _clean(p.match_note),
             "Заказчик": _clean(m.customer),
             "Поставщик": _clean(m.supplier),
             "ИНН поставщика": _clean(m.supplier_inn),

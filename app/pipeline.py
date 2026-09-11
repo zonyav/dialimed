@@ -210,7 +210,8 @@ async def run_online(params: SearchParams, progress: Progress = _noop) -> RunRes
                                           progress, set(metas))
 
     _note_services(rows, result)
-    await _enrich(rows, result, progress, use_ai=params.use_ai)
+    await _enrich(rows, result, progress, use_ai=params.use_ai,
+                  text=params.text)
 
     result.rows = rows
     result.stats.update({
@@ -400,9 +401,14 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
     Сверяемся с тем, что попадёт в отчёт: текст позиции и характеристики — оба
     видны в файле, так что любую строку можно объяснить. Характеристики нужны:
     на прогоне по «рускан 70п» они добавили 4 строки из 228, где модель названа
-    только там. Невидимой строки для сверки нет ни одной."""
+    только там. Невидимой строки для сверки нет ни одной.
+
+    Бренд с моделью сверяет `app.query`: он различает, где написан артикул, и
+    не требует имени рядом с приметным артикулом — «AJ15» без слова «Ajax»
+    написан в десяти контрактах из десяти, которые старый отбор терял."""
 
     from .spelling import any_match
+    from .query import judge_any
 
     ru = [x for x in ru if str(x).strip()]
     text = [x for x in text if str(x).strip()]
@@ -417,11 +423,20 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
     def wanted_here(p: Position) -> bool:
         if not (ru or text):
             return True
-        body = p.contract_text() + " " + (p.specs_text or "")
-        if ru and not any_match(ru, body):
+        if ru and not any_match(ru, p.contract_text() + " " + (p.specs_text or "")):
             return False
-        if text and not any_match(text, body):
-            return False
+        if text:
+            # то, что заказчик выбрал, и то, как названа регистрация, — разные
+            # вещи: в первом модель написана прямо, во втором бывает перечень
+            # всех исполнений сразу
+            chosen = " ".join(x for x in (p.name, p.ktru_name, p.trademark,
+                                          p.mark, p.specs_text) if x)
+            family = " ".join(x for x in (p.ru_name, p.ru_variants) if x)
+            v = judge_any(text, chosen, family)
+            if not v.ok:
+                return False
+            p.match_note = v.note
+            p.match_doubt = v.doubt
         return True
     for meta, poss in parsed:
         matched = [p for p in poss if p.matches_ktru(wanted)] if wanted else list(poss)
@@ -470,6 +485,10 @@ def _collect_rows(parsed: Iterable[tuple[ContractMeta, list[Position]]],
                 f"наименования: заказчик не заполнил код КТРУ"))
     count("контрактов без искомого КТРУ", no_match)
     count("позиций мимо запроса", off_query)
+    count("модель только в перечне исполнений РУ",
+          sum(1 for r in rows if r.pos.match_doubt == "исполнение"))
+    count("бренд в контракте не назван",
+          sum(1 for r in rows if r.pos.match_doubt == "бренд"))
     return rows
 
 
@@ -550,7 +569,8 @@ def _parse_names(rows: list[Row], result: RunResult | None = None) -> None:
 
 
 async def _enrich(rows: list[Row], result: RunResult,
-                  progress: Progress, use_ai: bool = False) -> None:
+                  progress: Progress, use_ai: bool = False,
+                  text: Iterable[str] = ()) -> None:
 
     if not rows:
         return
@@ -599,7 +619,44 @@ async def _enrich(rows: list[Row], result: RunResult,
     if use_ai:
         await _enrich_by_ai(rows, result, progress)
     _drop_holder_without_ru(rows, result)
+    _confirm_brand(rows, list(text), result)
     _note_registry_gaps(rows, result)
+
+
+def _confirm_brand(rows: list[Row], text: list[str], result: RunResult) -> None:
+    """Бренд, которого нет в контракте, но так зовут завод.
+
+    Отбор идёт до реестра, поэтому строку, где написано «AJ15» и не написано
+    «Ajax», он берёт с оговоркой. К этому моменту производитель уже известен —
+    «Guangzhou Ajax Medical Equipment», — и оговорка снимается: в десяти
+    потерянных контрактах из десяти именно так. Строку это не добавляет и не
+    убирает, меняется только подпись в колонке «Совпадение с запросом»."""
+
+    if not text or not rows:
+        return
+    from .query import judge_any
+
+    n = 0
+    for r in rows:
+        p = r.pos
+        if p.match_doubt != "бренд":
+            continue
+        known = " ".join(x for x in (p.manufacturer, p.declarant,
+                                     p.ru_registry_name) if x)
+        if not known:
+            continue
+        chosen = " ".join(x for x in (p.name, p.ktru_name, p.trademark,
+                                      p.mark, p.specs_text) if x)
+        family = " ".join(x for x in (p.ru_name, p.ru_variants) if x)
+        v = judge_any(text, chosen, family, known)
+        if v.ok and v.brand_known:
+            p.match_note = v.note
+            p.match_doubt = v.doubt
+            n += 1
+    if n:
+        result.stats["бренд подтверждён производителем"] = n
+        result.stats["бренд в контракте не назван"] = max(
+            0, result.stats.get("бренд в контракте не назван", 0) - n)
 
 
 def _note_registry_gaps(rows: list[Row], result: RunResult) -> None:
